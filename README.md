@@ -18,7 +18,7 @@
 <p align="center">
   <a href="#about">背景</a> · <a href="#features">功能概览</a> · <a href="#architecture">工作原理</a> ·
   <a href="#download">下载</a> · <a href="#quick-start">快速开始</a> ·
-  <a href="#skills">Overleaf Skills</a> · <a href="#docker">Docker</a>
+  <a href="#skills">Overleaf Skills</a> · <a href="#docker">Docker</a> · <a href="#structure">项目结构</a>
 </p>
 
 <a id="about"></a>
@@ -244,11 +244,9 @@ docker compose -f docker/compose.yml up -d --build
 
 本项目与 Overleaf 官方无隶属关系。请只操作自己拥有或获得授权的账号和项目，遵守试用资格与支付规则；订阅操作可能产生真实费用。
 
-<a id="development"></a>
+<a id="structure"></a>
 
-## 开发与构建
-
-Rust 工作区承载业务与服务，Tauri 2 提供桌面窗口、托盘和原生交互，原生 JavaScript / CSS 界面由 esbuild 打包。
+## 项目结构
 
 | 目录 | 职责 |
 | --- | --- |
@@ -263,6 +261,12 @@ Rust 工作区承载业务与服务，Tauri 2 提供桌面窗口、托盘和原�
 | `chrome_extension` | 浏览器会话操作与 WebSocket 桥接。 |
 | `docker` / `scripts` | 容器环境与跨平台打包脚本。 |
 | `docs` | 产品截图与工作原理图。 |
+
+<a id="development"></a>
+
+## 开发与构建
+
+Rust 工作区承载业务与服务，Tauri 2 提供桌面窗口、托盘和原生交互，原生 JavaScript / CSS 界面由 esbuild 打包。
 
 需要当前 stable Rust（最低 1.88）、Node.js 22 和 npm。Windows 需 MSVC 与 Visual Studio C++ Build Tools；macOS 需 Xcode Command Line Tools。
 

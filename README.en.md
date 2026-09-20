@@ -18,7 +18,7 @@
 <p align="center">
   <a href="#about">Background</a> · <a href="#features">Features</a> · <a href="#architecture">How it works</a> ·
   <a href="#download">Downloads</a> · <a href="#quick-start">Quick start</a> ·
-  <a href="#skills">Overleaf Skills</a> · <a href="#docker">Docker</a>
+  <a href="#skills">Overleaf Skills</a> · <a href="#docker">Docker</a> · <a href="#structure">Project structure</a>
 </p>
 
 <a id="about"></a>
@@ -244,11 +244,9 @@ Passwords, Cookies, Git tokens, card numbers, and security codes are stored in t
 
 This project is not affiliated with Overleaf. Use accounts and projects you own or are authorized to access, and follow trial eligibility and payment rules. Subscription operations may incur real charges.
 
-<a id="development"></a>
+<a id="structure"></a>
 
-## Development and builds
-
-The Rust workspace implements the service and business logic. Tauri 2 supplies the desktop window, tray, and native integration. esbuild bundles the vanilla JavaScript / CSS interface.
+## Project structure
 
 | Directory | Responsibility |
 | --- | --- |
@@ -263,6 +261,12 @@ The Rust workspace implements the service and business logic. Tauri 2 supplies t
 | `chrome_extension` | Browser-session operations and WebSocket bridging. |
 | `docker` / `scripts` | Container environment and cross-platform packaging. |
 | `docs` | Product screenshots and system diagrams. |
+
+<a id="development"></a>
+
+## Development and builds
+
+The Rust workspace implements the service and business logic. Tauri 2 supplies the desktop window, tray, and native integration. esbuild bundles the vanilla JavaScript / CSS interface.
 
 Use current stable Rust (minimum 1.88), Node.js 22, and npm. Windows needs MSVC and Visual Studio C++ Build Tools; macOS needs Xcode Command Line Tools.
 
