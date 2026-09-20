@@ -1,0 +1,16 @@
+{
+  "name": "overleaf-account-switcher-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Project-local Tauri CLI entry for the Overleaf Account Switcher desktop shell.",
+  "scripts": {
+    "tauri": "tauri",
+    "tauri:info": "tauri info",
+    "tauri:build": "tauri build --no-bundle",
+    "desktop:package": "powershell -ExecutionPolicy Bypass -File ..\\..\\scripts\\package-desktop.ps1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.10.1"
+  }
+}

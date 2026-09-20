@@ -1,0 +1,10 @@
+[[permission]]
+identifier = "allow-desktop-bridge"
+description = "Allows the local desktop UI to use native files, clipboard, Chrome setup and verified application updates."
+commands.allow = [
+  "desktop_write_text_file",
+  "desktop_write_clipboard_text",
+  "desktop_focus_main_window",
+  "desktop_open_chrome_extensions",
+  "desktop_install_update",
+]

@@ -1,0 +1,831 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Overleaf 账号控制台</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/ui/styles.css?v=20260821-runtime158">
+  </head>
+  <body>
+    <header class="topbar app-header">
+      <div class="topbar-brand header-brand">
+        <div class="logo-icon" aria-hidden="true"><img src="data:image/png;base64,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" alt=""></div>
+        <h1 class="brand-title">Overleaf 账号控制台</h1>
+        <span id="service-status" class="ui-tag">正在检查服务...</span>
+        <span id="extension-bridge-status" class="ui-tag">扩展待检测</span>
+      </div>
+      <div class="topbar-controls header-controls">
+        <div id="profile-switcher" class="profile-switcher profile-panel">
+          <div id="profile-avatar" class="profile-avatar">?</div>
+          <select id="profile-select" class="profile-select" aria-label="选择 Chrome 档案"></select>
+          <button id="profile-redetect" class="inline-action ui-btn" type="button">重检</button>
+        </div>
+        <button id="topbar-onboarding" class="ui-btn" type="button" data-open-onboarding title="安装教程" aria-label="安装教程">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>
+          <span>安装教程</span>
+        </button>
+        <button id="refresh-button" class="ui-btn" type="button" title="刷新全局状态" aria-label="刷新全局状态">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+          <span>刷新</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="onboarding-modal" class="modal-backdrop" hidden>
+      <section class="modal onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+        <div class="section-header onboarding-head">
+          <div>
+            <span class="eyebrow">首次连接</span>
+            <h2 id="onboarding-title">安装 Chrome 扩展</h2>
+            <p class="muted">浏览器换号、当前账号检测和无感换号都依赖本地扩展桥。</p>
+          </div>
+          <button id="onboarding-dismiss-session" class="inline-action" type="button">本次关闭</button>
+        </div>
+        <div class="onboarding-grid">
+          <div class="onboarding-status-panel">
+            <div id="onboarding-status" class="extension-status-card"></div>
+            <div class="extension-path-card">
+              <span class="eyebrow">扩展目录</span>
+              <code id="onboarding-extension-dir">等待服务读取</code>
+            </div>
+          </div>
+          <ol class="setup-steps">
+            <li>
+              <span class="step-index">1</span>
+              <div>
+                <strong>打开扩展管理页</strong>
+                <span>进入 <code>chrome://extensions/</code>。</span>
+              </div>
+            </li>
+            <li>
+              <span class="step-index">2</span>
+              <div>
+                <strong>启用开发者模式</strong>
+                <span>打开右上角“开发者模式”。</span>
+              </div>
+            </li>
+            <li>
+              <span class="step-index">3</span>
+              <div>
+                <strong>加载本地扩展</strong>
+                <span>选择项目下的 <code>chrome_extension</code> 目录。</span>
+              </div>
+            </li>
+            <li>
+              <span class="step-index">4</span>
+              <div>
+                <strong>回到应用检测</strong>
+                <span>连接成功后会解锁无感换号和浏览器账号检测。</span>
+              </div>
+            </li>
+          </ol>
+        </div>
+        <div class="modal-actions onboarding-actions">
+          <button id="onboarding-open-extensions" type="button">打开扩展管理页</button>
+          <button id="onboarding-copy-path" type="button" disabled>复制扩展目录</button>
+          <button id="onboarding-check-connection" type="button">检测扩展连接</button>
+          <button id="onboarding-dismiss-permanent" class="secondary-action" type="button">不再显示</button>
+        </div>
+        <p class="onboarding-footnote">永久关闭只隐藏教学弹层，扩展状态仍会在顶栏显示；需要时可在“设置运行”里重置。</p>
+      </section>
+    </div>
+
+    <div id="confirm-modal" class="modal-backdrop app-confirm-backdrop" hidden>
+      <section class="modal app-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+        <div class="confirm-mark" aria-hidden="true"></div>
+        <div class="confirm-copy">
+          <span id="confirm-eyebrow" class="eyebrow">需要确认</span>
+          <h2 id="confirm-title">确认操作</h2>
+          <p id="confirm-message" class="muted">此操作需要你确认后继续。</p>
+          <ul id="confirm-points" class="confirm-points"></ul>
+        </div>
+        <div class="modal-actions confirm-actions">
+          <button id="confirm-cancel" class="secondary-action" type="button">取消</button>
+          <button id="confirm-submit" type="button">确认继续</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-relevant="additions"></div>
+
+    <div class="app-shell">
+      <aside class="app-sidebar" aria-label="主导航">
+        <nav class="sidebar-nav">
+        <button type="button" class="nav-item" data-page-target="dashboard">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="5" rx="1"></rect><rect x="14" y="12" width="7" height="9" rx="1"></rect><rect x="3" y="16" width="7" height="5" rx="1"></rect></svg>
+          <span>仪表盘</span>
+        </button>
+        <button type="button" class="nav-item active" data-page-target="accounts" aria-current="page">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+          <span>账号管理</span>
+        </button>
+        <button type="button" class="nav-item" data-page-target="registration">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><path d="M20 8v6"></path><path d="M23 11h-6"></path></svg>
+          <span>注册试用</span>
+        </button>
+        <button type="button" class="nav-item" data-page-target="resources">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"></rect><path d="M2 10h20"></path><path d="M6 15h2"></path><path d="M11 15h4"></path></svg>
+          <span>卡片地址</span>
+        </button>
+        <button type="button" class="nav-item" data-page-target="settings">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>
+          <span>设置运行</span>
+        </button>
+        </nav>
+        <div class="sidebar-footer" aria-label="侧边栏工具">
+          <button id="theme-toggle" class="icon-btn sidebar-theme-toggle" type="button" aria-label="切换为夜间模式" title="切换为夜间模式">
+            <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path></svg>
+            <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.99 12.48A8.5 8.5 0 1 1 11.52 3a6.5 6.5 0 0 0 9.47 9.48Z"></path></svg>
+          </button>
+          <span class="app-version" title="当前版本">v0.1.0</span>
+          <button id="sidebar-toggle" class="icon-btn sidebar-toggle" type="button" aria-label="收起侧边栏" title="收起侧边栏">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16"></path><path d="m16 8-4 4 4 4"></path></svg>
+          </button>
+        </div>
+      </aside>
+
+      <main class="app-content">
+      <section id="account-section" class="band account-hub app-page-panel page-panel active" data-app-page="accounts">
+        <div class="section-header page-header">
+          <h2 class="page-title">账号管理</h2>
+          <span id="account-count" class="muted"></span>
+        </div>
+        <span id="account-action-status" class="visually-hidden" aria-live="polite"></span>
+        <div class="account-control-row">
+        <div class="account-bulk-bar">
+          <div class="account-bulk-row account-bulk-row-primary">
+            <label class="check-row select-all-row">
+              <input id="accounts-select-all" type="checkbox" aria-label="选择全部账号">
+              全选
+            </label>
+            <label class="check-row migration-toggle">
+              <input id="account-toolbar-migrate" type="checkbox">
+              换号时迁移项目
+            </label>
+            <label class="check-row migration-toggle">
+              <input id="account-toolbar-sync-skills" type="checkbox">
+              同步 skills 账号
+            </label>
+            <details class="account-status-menu">
+              <summary class="ui-btn account-toolbar-button" aria-label="状态操作" title="状态操作">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"></circle><circle cx="19" cy="12" r="2"></circle><circle cx="5" cy="12" r="2"></circle></svg>
+                <span class="visually-hidden">状态操作</span>
+              </summary>
+              <div class="account-status-menu-panel">
+                <button type="button" data-account-status-select="cookie-invalid">选中 Cookie 失效</button>
+                <button type="button" data-account-status-select="git-invalid">选中 Git 异常</button>
+                <button type="button" data-account-status-select="git-missing">选中令牌缺失</button>
+                <button type="button" data-account-status-select="password-missing">选中密码缺失</button>
+                <button type="button" data-account-status-select="expired">选中已过期</button>
+              </div>
+            </details>
+            <button class="ui-btn ui-btn-sm inline-action clear-selection-action" type="button" data-account-bulk-action="clear-selection" title="清除选择" aria-label="清除选择">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+              <span class="visually-hidden">清除选择</span>
+            </button>
+            <span id="account-selection-status" class="account-selection-status">已选 0 个</span>
+          </div>
+          <div class="account-bulk-row account-bulk-row-actions">
+            <button class="ui-btn ui-btn-sm account-bulk-strong password-batch-button" type="button" data-password-batch-open="passwords" title="按卡片选择顺序更新本地保存密码" aria-label="本地密码">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+              <span class="visually-hidden">本地密码</span>
+            </button>
+            <button class="ui-btn ui-btn-sm account-bulk-strong danger password-batch-button" type="button" data-password-batch-open="overleaf-password" title="按卡片选择顺序修改 Overleaf 远端密码" aria-label="远端改密">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V22a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H2a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V2a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H22a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>
+              <span class="visually-hidden">远端改密</span>
+            </button>
+            <button class="ui-btn ui-btn-sm inline-action" type="button" data-account-bulk-action="refresh-session" title="刷新 Cookie" aria-label="刷新 Cookie">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5"></path><circle cx="8.5" cy="8.5" r=".5"></circle><circle cx="7.5" cy="14.5" r=".5"></circle><circle cx="14.5" cy="15.5" r=".5"></circle></svg>
+              <span class="visually-hidden">刷新 Cookie</span>
+            </button>
+            <button class="ui-btn ui-btn-sm inline-action" type="button" data-account-bulk-action="refresh-git" title="刷新 Git" aria-label="刷新 Git">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M13 6h3a2 2 0 0 1 2 2v7"></path><line x1="6" y1="9" x2="6" y2="21"></line></svg>
+              <span class="visually-hidden">刷新 Git</span>
+            </button>
+            <button class="ui-btn ui-btn-sm inline-action" type="button" data-account-bulk-action="generate-git" title="获取令牌" aria-label="获取令牌">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2l-2 2m-7.6 7.6a5.5 5.5 0 1 1-3-3L15.5 1.5l3 3L22 1"></path><path d="M15.5 7.5l3 3"></path></svg>
+              <span class="visually-hidden">获取令牌</span>
+            </button>
+            <button class="ui-btn ui-btn-sm inline-action" type="button" data-account-bulk-action="browser-login" title="打开浏览器" aria-label="打开浏览器">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+              <span class="visually-hidden">打开浏览器</span>
+            </button>
+          </div>
+          <div id="account-selected-preview" class="account-selected-preview" aria-live="polite"></div>
+        </div>
+        <div class="account-command-deck toolbar">
+          <div class="account-command-row account-command-row-primary">
+            <details class="account-add-menu">
+              <summary class="ui-btn ui-btn-primary account-add-trigger" data-account-assist-entry="add" aria-label="添加账号" title="添加账号"><span aria-hidden="true">+</span><span class="visually-hidden">添加账号</span></summary>
+              <div class="account-add-menu-panel">
+                <button type="button" data-account-assist-entry="credential-add" data-account-tool-open="credentials" data-account-tool-focus="credential-add-aliases">账号密码登录</button>
+                <button type="button" data-account-assist-entry="cookie-import" data-account-tool-open="io" data-account-tool-focus="manual-cookie-entries">Cookie 登录</button>
+                <button type="button" data-account-assist-entry="json-import" data-account-tool-open="io" data-account-tool-focus="import-choose-file">文件导入</button>
+                <button type="button" data-password-batch-open="passwords">更新本地密码</button>
+                <button type="button" data-password-batch-open="overleaf-password">修改 Overleaf 密码</button>
+              </div>
+            </details>
+            <button class="ui-btn account-toolbar-button" type="button" data-account-assist-entry="json-import" data-account-tool-open="io" data-account-tool-focus="import-choose-file" aria-label="导入账号" title="导入账号">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              <span class="visually-hidden">导入</span>
+            </button>
+            <button id="account-toolbar-export" class="ui-btn account-toolbar-button" type="button" data-account-assist-entry="export" data-account-tool-open="io" data-account-tool-focus="export-aliases" aria-label="导出账号" title="导出账号">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+              <span class="visually-hidden">导出</span>
+            </button>
+            <button id="account-toolbar-refresh" class="account-toolbar-icon-button" type="button" aria-label="刷新账号工作台" title="刷新账号工作台">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+            </button>
+            <button id="account-toolbar-delete" class="account-toolbar-icon-button danger" type="button" aria-label="删除选中账号" title="删除选中账号">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            </button>
+          </div>
+          <div class="account-command-row account-command-row-secondary">
+          <label class="search-field compact-search-field" title="搜索账号">
+            <span aria-hidden="true" class="search-trigger-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+            </span>
+            <span class="visually-hidden">搜索账号</span>
+            <input id="account-search" type="search" placeholder="别名、邮箱、状态" autocomplete="off">
+          </label>
+          <div class="account-filter-strip" aria-label="账号筛选排序">
+            <details class="compact-select" data-compact-select-menu="account-filter">
+              <summary class="compact-select-trigger" aria-label="筛选账号" title="筛选账号">
+                <span aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"></path><path d="M5 2h14"></path><path d="M17 22v-4.2a4 4 0 0 0-1.2-2.8L12 11l-3.8 4A4 4 0 0 0 7 17.8V22"></path><path d="M7 2v4.2A4 4 0 0 0 8.2 9L12 13l3.8-4A4 4 0 0 0 17 6.2V2"></path></svg>
+                </span>
+              </summary>
+              <span class="visually-hidden">筛选</span>
+              <select id="account-filter" class="compact-native-select" tabindex="-1" aria-hidden="true">
+                <option value="all">全部账号</option>
+                <option value="active">未过期</option>
+                <option value="expired">已过期</option>
+                <option value="trial-7">7 天试用</option>
+                <option value="trial-21">21 天试用</option>
+                <option value="cookie-invalid">Cookie 失效</option>
+                <option value="git-invalid">Git 令牌异常</option>
+                <option value="password-error">密码错误</option>
+              </select>
+              <div class="compact-select-panel">
+                <button type="button" data-compact-select-target="account-filter" data-compact-select-value="all">全部账号</button>
+                <button type="button" data-compact-select-target="account-filter" data-compact-select-value="active">未过期</button>
+                <button type="button" data-compact-select-target="account-filter" data-compact-select-value="expired">已过期</button>
+                <button type="button" data-compact-select-target="account-filter" data-compact-select-value="trial-7">7 天试用</button>
+                <button type="button" data-compact-select-target="account-filter" data-compact-select-value="trial-21">21 天试用</button>
+                <button type="button" data-compact-select-target="account-filter" data-compact-select-value="cookie-invalid">Cookie 失效</button>
+                <button type="button" data-compact-select-target="account-filter" data-compact-select-value="git-invalid">Git 令牌异常</button>
+                <button type="button" data-compact-select-target="account-filter" data-compact-select-value="password-error">密码错误</button>
+              </div>
+            </details>
+            <details class="compact-select" data-compact-select-menu="account-sort">
+              <summary class="compact-select-trigger" aria-label="排序账号" title="排序账号">
+                <span aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13"></path><path d="M8 12h13"></path><path d="M8 18h13"></path><path d="M3 6h.01"></path><path d="M3 12h.01"></path><path d="M3 18h.01"></path></svg>
+                </span>
+              </summary>
+              <span class="visually-hidden">排序</span>
+              <select id="account-sort" class="compact-native-select" tabindex="-1" aria-hidden="true">
+                <option value="import-order">导入顺序</option>
+                <option value="alias">别名 A-Z</option>
+                <option value="current">运行中优先</option>
+                <option value="trial-remaining-asc">剩余天数少优先</option>
+                <option value="trial-remaining-desc">剩余天数多优先</option>
+                <option value="cookie-status">Cookie 状态</option>
+                <option value="git-status">Git 状态</option>
+              </select>
+              <div class="compact-select-panel">
+                <button type="button" data-compact-select-target="account-sort" data-compact-select-value="import-order">导入顺序</button>
+                <button type="button" data-compact-select-target="account-sort" data-compact-select-value="alias">别名 A-Z</button>
+                <button type="button" data-compact-select-target="account-sort" data-compact-select-value="current">运行中优先</button>
+                <button type="button" data-compact-select-target="account-sort" data-compact-select-value="trial-remaining-asc">剩余天数少优先</button>
+                <button type="button" data-compact-select-target="account-sort" data-compact-select-value="trial-remaining-desc">剩余天数多优先</button>
+                <button type="button" data-compact-select-target="account-sort" data-compact-select-value="cookie-status">Cookie 状态</button>
+                <button type="button" data-compact-select-target="account-sort" data-compact-select-value="git-status">Git 状态</button>
+              </div>
+            </details>
+          </div>
+          </div>
+        </div>
+        </div>
+        <div id="password-selection-assist" class="password-selection-assist" hidden></div>
+        <div id="account-card-grid" class="account-card-grid" aria-live="polite"></div>
+        <div id="account-workbench" class="account-workbench">
+          <div id="account-workbench-header" class="account-workbench-header" hidden>
+            <div>
+              <span class="eyebrow">卡片操作</span>
+              <strong id="account-workbench-title">账号工具</strong>
+            </div>
+            <div id="account-workbench-context" class="account-workbench-context"></div>
+            <button id="account-workbench-close" class="inline-action" type="button">关闭</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="dashboard-section" class="band dashboard-strip app-page-panel page-panel" data-app-page="dashboard" hidden>
+        <div class="section-header page-header">
+          <h2 class="page-title">运行概览</h2>
+          <span>
+            <button id="detect-browser-account" class="inline-action" type="button">检测浏览器账号</button>
+            <span id="browser-account-status" class="muted"></span>
+            <span id="last-updated" class="muted"></span>
+          </span>
+        </div>
+        <div id="dashboard-grid" class="metric-grid" aria-live="polite"></div>
+      </section>
+
+      <section class="band account-tool-section" data-account-tool="switch">
+        <div class="section-header">
+          <h2>无感换号</h2>
+          <span id="switch-status" class="muted"></span>
+        </div>
+        <form id="switch-form" class="inline-form">
+          <label>
+            目标账号
+            <input id="switch-alias" name="alias" type="text" autocomplete="off">
+          </label>
+          <label class="check-row">
+            <input id="switch-migrate" name="migrate_projects" type="checkbox">
+            迁移项目
+          </label>
+          <button id="switch-submit" type="submit">生成换号计划</button>
+          <button id="switch-project-preview" type="button">预览项目</button>
+          <button id="switch-execute" type="button">开始换号</button>
+        </form>
+        <div id="switch-project-preview-result" class="import-preview" aria-live="polite"></div>
+      </section>
+
+      <section class="band account-tool-section" data-account-tool="credentials">
+        <div class="section-header">
+          <h2>账号密码登录</h2>
+          <span id="credential-status" class="muted"></span>
+        </div>
+        <div class="io-grid">
+          <form id="credential-add-form" class="stack-form">
+            <label>
+              别名
+              <input id="credential-add-aliases" name="aliases" type="text" placeholder="别名1,别名2" autocomplete="off">
+            </label>
+            <label>
+              邮箱
+              <input id="credential-add-emails" name="emails" type="text" placeholder="邮箱1@example.com,邮箱2@example.com" autocomplete="off">
+            </label>
+            <label>
+              密码
+              <input id="credential-add-passwords" name="passwords" type="password" placeholder="密码1,密码2" autocomplete="new-password">
+            </label>
+            <button id="credential-add-submit" type="submit">添加账号</button>
+          </form>
+
+          <form id="credential-refresh-form" class="stack-form">
+            <label>
+              别名
+              <input id="credential-refresh-aliases" name="aliases" type="text" placeholder="别名1,别名2" autocomplete="off">
+            </label>
+            <label>
+              密码
+              <input id="credential-refresh-passwords" name="passwords" type="password" placeholder="密码1,密码2" autocomplete="current-password">
+            </label>
+            <button id="credential-refresh-submit" type="submit">刷新 Cookie</button>
+          </form>
+        </div>
+      </section>
+
+      <section id="registration-section" class="band registration-panel app-page-panel page-panel" data-app-page="registration" hidden>
+        <div class="section-header page-header registration-header">
+          <div>
+            <h2 class="page-title">试用注册</h2>
+          </div>
+          <span id="registration-status" class="ui-tag registration-status-tag"></span>
+        </div>
+        <div class="registration-grid">
+          <form id="registration-form" class="registration-form ui-form">
+            <label>
+              账号来源
+              <select id="registration-source" name="source">
+                <option value="new">新号</option>
+                <option value="existing">老号</option>
+              </select>
+            </label>
+            <label id="registration-existing-method-field" hidden>
+              登录方式
+              <select id="registration-existing-method" name="existing_login_source" disabled>
+                <option value="alias">账号别名</option>
+                <option value="credentials">账号密码</option>
+                <option value="cookie">Cookie</option>
+              </select>
+            </label>
+            <label id="registration-existing-field" hidden>
+              账号别名
+              <select id="registration-existing-alias" name="existing_alias" disabled>
+                <option value="">切换到老号后检查资格</option>
+              </select>
+            </label>
+            <div id="registration-new-fields" class="registration-new-fields">
+              <label id="registration-alias-field">
+                别名
+                <input id="registration-alias" name="alias" type="text" placeholder="留空则使用邮箱前缀" autocomplete="off">
+              </label>
+              <label id="registration-email-field">
+                邮箱
+                <input id="registration-email" name="email" type="email" autocomplete="off">
+              </label>
+              <label id="registration-password-field">
+                密码
+                <input id="registration-password" name="password" type="password" minlength="8" autocomplete="new-password">
+              </label>
+              <label id="registration-cookie-field" hidden>
+                overleaf_session2
+                <input id="registration-session-cookie" name="session_cookie" type="password" autocomplete="off">
+              </label>
+            </div>
+            <label>
+              试用期
+              <select id="registration-trial-days" name="trial_days">
+                <option value="21">21 天</option>
+                <option value="7">7 天</option>
+              </select>
+            </label>
+            <label>
+              卡片策略
+              <select id="registration-card-strategy" name="card_selection_strategy">
+                <option value="new_then_used_then_failed">新卡优先，其次已用/失败卡</option>
+                <option value="new_only">仅新卡</option>
+              </select>
+            </label>
+            <label>
+              卡片 BIN
+              <select id="registration-card-bin" name="card_bin">
+                <option value="">全部 BIN</option>
+              </select>
+            </label>
+            <label class="check-row registration-check-row">
+              <input id="registration-git-token" name="auto_fetch_git_token" type="checkbox" checked>
+              <span>Git 令牌</span>
+            </label>
+            <button id="registration-submit" class="ui-btn ui-btn-primary registration-submit" type="submit">开始注册</button>
+          </form>
+          <aside class="registration-side-panel" aria-label="试用配置摘要">
+            <div class="registration-side-head">
+              <span class="status-led on" aria-hidden="true"></span>
+              <strong>试用配置</strong>
+            </div>
+            <div class="registration-trial-options" aria-label="试用期选项">
+              <span class="ui-tag ui-tag-green">7 天</span>
+              <span class="ui-tag ui-tag-blue">21 天</span>
+            </div>
+            <div class="registration-summary-list">
+              <span><strong>卡片</strong>按策略选择</span>
+              <span><strong>令牌</strong>可自动获取</span>
+              <span><strong>结果</strong>写入账号库</span>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="band account-tool-section" data-account-tool="io">
+        <div class="section-header">
+          <h2>导入 / 导出</h2>
+          <span id="io-status" class="muted"></span>
+        </div>
+        <div class="io-grid">
+          <form id="import-form" class="stack-form">
+            <div class="import-file-picker">
+              <input id="import-web-files" type="file" accept=".json,application/json" multiple hidden>
+              <button id="import-choose-file" type="button">选择 JSON 文件</button>
+            </div>
+            <div id="import-file-queue" class="import-file-queue"></div>
+            <div class="import-post-actions" aria-label="导入后动作">
+              <label class="check-row">
+                <input id="import-refresh" name="refresh_session_metadata" type="checkbox" checked>
+                刷新状态
+              </label>
+              <label class="check-row">
+                <input id="import-git-token" name="fetch_git_token" type="checkbox" checked>
+                Git 令牌
+              </label>
+            </div>
+            <button id="import-submit" type="submit">导入</button>
+          </form>
+
+          <form id="manual-cookie-form" class="stack-form">
+            <label>
+              手动导入 Cookie
+              <textarea id="manual-cookie-entries" name="entries" rows="5" spellcheck="false" placeholder="每行一个账号：别名 邮箱 Cookie（空格分隔）"></textarea>
+            </label>
+            <label class="check-row">
+              <input id="manual-cookie-refresh" name="refresh_session_metadata" type="checkbox" checked>
+              刷新状态
+            </label>
+            <label class="check-row">
+              <input id="manual-cookie-git-token" name="fetch_git_token" type="checkbox" checked>
+              Git 令牌
+            </label>
+            <button id="manual-cookie-submit" type="submit">导入 Cookie</button>
+          </form>
+
+          <form id="export-form" class="stack-form">
+            <label>
+              别名
+            <input id="export-aliases" name="aliases" type="text" placeholder="别名1,别名2" autocomplete="off">
+            </label>
+            <label>
+              模式
+              <select id="export-mode" name="mode">
+                <option value="single_file">单个 accounts.json</option>
+                <option value="multiple_files">每个账号一个文件</option>
+              </select>
+            </label>
+            <label>
+              输出目录
+              <input id="export-output-dir" name="output_dir" type="text" autocomplete="off">
+            </label>
+            <label class="check-row">
+              <input id="export-confirm-overwrite" name="confirm_overwrite" type="checkbox">
+              覆盖已有导出文件
+            </label>
+            <button id="export-choose-dir" type="button">选择文件夹</button>
+            <button id="export-save-default-dir" type="button">保存默认目录</button>
+            <button id="export-submit" type="submit">导出</button>
+            <button id="export-download" type="button">下载 JSON</button>
+            <p id="export-sensitive-warning" class="warning-note">导出的账号 JSON 可能包含已保存的密码、Cookie 和 Git 集成令牌。</p>
+          </form>
+        </div>
+      </section>
+
+      <section class="band account-tool-section" data-account-tool="passwords">
+        <div class="section-header">
+          <h2>本地密码</h2>
+          <span id="password-update-status" class="muted"></span>
+        </div>
+        <form id="password-form" class="inline-form">
+          <div id="password-target-list" class="password-target-list" aria-live="polite"></div>
+          <label class="visually-hidden">
+            别名
+            <input id="password-aliases" name="aliases" type="text" placeholder="别名1,别名2" autocomplete="off">
+          </label>
+          <label class="visually-hidden">
+            密码
+            <input id="password-values" name="passwords" type="password" minlength="8" autocomplete="new-password">
+          </label>
+          <button id="password-submit" class="password-submit-button" type="submit">更新选中账号</button>
+        </form>
+      </section>
+
+      <section class="band account-tool-section" data-account-tool="overleaf-password">
+        <div class="section-header">
+          <h2>Overleaf 密码</h2>
+          <span id="overleaf-password-status" class="muted"></span>
+        </div>
+        <form id="overleaf-password-form" class="inline-form">
+          <div id="overleaf-password-target-list" class="password-target-list" aria-live="polite"></div>
+          <label class="visually-hidden">
+            别名
+            <input id="overleaf-password-aliases" name="aliases" type="text" placeholder="别名1,别名2" autocomplete="off">
+          </label>
+          <label class="visually-hidden">
+            新密码
+            <input id="overleaf-password-values" name="passwords" type="password" minlength="8" autocomplete="new-password">
+          </label>
+          <button id="overleaf-password-submit" class="password-submit-button danger" type="submit">按顺序修改</button>
+        </form>
+      </section>
+
+      <section class="band account-danger-zone account-tool-section" data-account-tool="remove">
+        <div class="section-header">
+          <h2>删除账号</h2>
+          <span id="remove-status" class="muted"></span>
+        </div>
+        <form id="remove-form" class="inline-form removal-form">
+          <label>
+            别名
+            <input id="remove-aliases" name="aliases" type="text" placeholder="别名1,别名2" autocomplete="off">
+          </label>
+          <label class="check-row">
+            <input id="remove-cleanup" name="cleanup_remote_projects" type="checkbox">
+            先清理项目
+          </label>
+          <label class="check-row">
+            <input id="remove-confirm" name="confirm_local_only" type="checkbox">
+            确认本地删除
+          </label>
+          <button id="remove-preview" type="button">预览清理</button>
+          <button id="remove-submit" type="submit">应用</button>
+        </form>
+        <div id="remove-preview-result" class="import-preview" aria-live="polite"></div>
+      </section>
+
+      <section id="resources-section" class="resources-grid app-page-panel page-panel" data-app-page="resources" hidden>
+        <div class="panel resource-panel resource-card-panel">
+          <div class="section-header resource-section-header">
+            <div>
+              <h2 class="page-title">银行卡</h2>
+            </div>
+            <span class="resource-status-row"><span id="card-count" class="ui-tag ui-tag-blue"></span> <span id="card-action-status" class="muted"></span><button id="card-export" type="button" class="ui-btn ui-btn-sm" title="导出选中的银行卡" disabled>导出</button><button id="card-delete" type="button" class="ui-btn ui-btn-sm" title="删除选中的银行卡" disabled>删除</button></span>
+          </div>
+          <div class="table-wrap compact resource-table-wrap card-bin-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>卡片</th>
+                  <th>有效期</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="cards-body"></tbody>
+            </table>
+          </div>
+          <form id="card-form" class="stack-form compact-form ui-form resource-form">
+            <label>
+              卡片行
+              <textarea id="card-line" name="line" rows="2" placeholder="number----month/year----cvc" autocomplete="off" spellcheck="false" required></textarea>
+            </label>
+            <button id="card-submit" class="ui-btn ui-btn-primary" type="submit">添加卡片</button>
+          </form>
+        </div>
+
+        <div class="panel resource-panel resource-address-panel">
+          <div class="section-header resource-section-header">
+            <div>
+              <h2 class="page-title">地址</h2>
+            </div>
+            <span class="resource-status-row"><span id="address-count" class="ui-tag ui-tag-green"></span> <span id="address-action-status" class="muted" hidden></span></span>
+          </div>
+          <form id="address-form" class="stack-form address-form compact-form ui-form resource-form">
+            <div class="address-display-grid" aria-label="当前注册地址">
+              <button class="address-copy-field" type="button" data-address-copy-field="name">
+                <span>姓名</span><strong id="address-name">待获取</strong>
+              </button>
+              <button class="address-copy-field" type="button" data-address-copy-field="phone">
+                <span>电话</span><strong id="address-phone">待获取</strong>
+              </button>
+              <button class="address-copy-field wide-field" type="button" data-address-copy-field="line1">
+                <span>地址行 1</span><strong id="address-line1">待获取</strong>
+              </button>
+              <button class="address-copy-field" type="button" data-address-copy-field="city">
+                <span>城市</span><strong id="address-city">待获取</strong>
+              </button>
+              <button class="address-copy-field" type="button" data-address-copy-field="state">
+                <span>州/省</span><strong id="address-state">待获取</strong>
+              </button>
+              <button class="address-copy-field" type="button" data-address-copy-field="zip">
+                <span>邮编</span><strong id="address-zip">待获取</strong>
+              </button>
+            </div>
+            <button id="address-submit" class="ui-btn ui-btn-primary" type="submit">获取地址</button>
+            <button id="address-fallback" class="ui-btn" type="button">使用备用地址</button>
+          </form>
+          <div id="addresses-list" class="list resource-address-list"></div>
+        </div>
+      </section>
+
+      <section id="settings-section" class="split settings-split app-page-panel page-panel" data-app-page="settings" hidden>
+        <div class="panel runtime-panel">
+          <div class="section-header settings-hero">
+            <div>
+              <h2 class="page-title">控制台</h2>
+              <p class="muted">集中查看本地路径、密钥存储、Chrome 档案、本地 API 和清理边界。</p>
+            </div>
+            <span id="runtime-action-status" class="runtime-action-status muted"></span>
+          </div>
+          <div id="runtime-health-strip" class="runtime-health-strip" aria-label="运行状态摘要"></div>
+          <div class="settings-runtime-grid">
+            <section class="settings-card settings-card-wide">
+              <div class="settings-card-head"><h3>应用更新</h3><span class="app-version muted">v0.1.0</span></div>
+              <div class="settings-action-row">
+                <button id="check-updates" type="button">检查更新</button>
+                <button id="install-update" type="button" hidden>下载并更新</button>
+                <a id="download-update" class="ui-btn" target="_blank" rel="noopener noreferrer" hidden>下载新版</a>
+                <span id="update-status" class="muted" role="status" aria-live="polite"></span>
+              </div>
+              <div id="docker-update" hidden>
+                <p class="muted">目标镜像：<code id="docker-update-image"></code></p>
+                <pre id="docker-update-command" class="update-command"></pre>
+                <div class="settings-action-row"><button id="copy-update-command" type="button">复制更新命令</button></div>
+              </div>
+            </section>
+            <section class="settings-card settings-card-wide">
+              <div class="settings-card-head">
+                <span class="settings-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg></span>
+                <div>
+                  <span class="eyebrow">总览</span>
+                  <h3>运行总览</h3>
+                </div>
+              </div>
+              <dl id="config-list" class="config-list"></dl>
+            </section>
+            <section class="settings-card settings-card-wide">
+              <div class="settings-card-head"><h3>Overleaf Skills</h3></div>
+              <div id="skills-list" class="list runtime-list"></div>
+            </section>
+            <section class="settings-card">
+              <div class="settings-card-head">
+                <span class="settings-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67 0C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.2 1.2 0 0 1 1.52 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1Z"></path></svg></span>
+                <div>
+                  <span class="eyebrow">安全</span>
+                  <h3>安全与密钥</h3>
+                </div>
+              </div>
+              <dl id="secret-storage-fields" class="config-list"></dl>
+            </section>
+            <section class="settings-card">
+              <div class="settings-card-head">
+                <span class="settings-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"></rect><path d="M8 21h8"></path><path d="M12 18v3"></path><path d="M3 8h18"></path></svg></span>
+                <div>
+                  <span class="eyebrow">档案</span>
+                  <h3>浏览器档案</h3>
+                </div>
+              </div>
+              <div id="browser-profiles-list" class="list runtime-list"></div>
+              <div id="temp-profiles-preview" class="list runtime-list"></div>
+              <form id="browser-proxy-form" class="browser-proxy-form ui-form">
+                <label>
+                  网络策略
+                  <select id="browser-proxy-mode" name="mode">
+                    <option value="auto">自动（直连优先）</option>
+                    <option value="inherit_system">继承系统代理</option>
+                    <option value="direct">直连</option>
+                    <option value="custom">自定义代理</option>
+                  </select>
+                </label>
+                <label id="browser-proxy-server-field">
+                  代理地址
+                  <input id="browser-proxy-server" name="server" type="text" placeholder="http://127.0.0.1:7890" autocomplete="off">
+                </label>
+                <button id="browser-proxy-save" class="ui-btn" type="submit">保存网络策略</button>
+                <span id="browser-proxy-status" class="muted" aria-live="polite"></span>
+              </form>
+              <div class="settings-action-row">
+                <button id="cleanup-temp-profiles" type="button">清理临时档案</button>
+                <button id="reset-onboarding" type="button">重置扩展引导</button>
+                <a id="task-browser-open" class="ui-btn" target="_blank" rel="noopener noreferrer" hidden>打开任务浏览器</a>
+              </div>
+            </section>
+            <section class="settings-card">
+              <div class="settings-card-head">
+                <span class="settings-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="8" rx="2"></rect><rect x="3" y="14" width="18" height="6" rx="2"></rect><path d="M7 8h.01"></path><path d="M7 17h.01"></path></svg></span>
+                <div>
+                  <span class="eyebrow">服务</span>
+                  <h3>服务接口与产物</h3>
+                </div>
+              </div>
+              <div id="service-api-routes-list" class="list runtime-list"></div>
+              <div id="runtime-artifacts-list" class="list runtime-list"></div>
+              <div class="settings-action-row">
+                <button id="runtime-diagnostics" type="button">查看诊断</button>
+                <button id="scan-artifacts" type="button">扫描产物</button>
+                <button id="cleanup-artifacts" type="button">清理产物</button>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+      </main>
+    </div>
+
+    <section class="runtime-log-dock log-dock" aria-label="运行日志">
+      <div class="runtime-log-head log-dock-header">
+        <div>
+          <strong>运行日志</strong>
+          <span><span id="task-count" class="muted"></span> <span id="task-stream-status" class="muted"></span></span>
+        </div>
+        <div id="runtime-log-state" class="runtime-log-state state-idle">空闲</div>
+        <div id="runtime-log-summary" class="runtime-log-summary" aria-label="任务状态摘要"></div>
+        <button id="runtime-log-toggle" class="inline-action runtime-log-toggle" type="button" aria-expanded="true">收起</button>
+        <button id="copy-runtime-log" class="inline-action" type="button" title="复制当前运行日志">复制日志</button>
+        <button id="clear-terminal-tasks" class="inline-action" type="button">清除已结束</button>
+        <button id="focus-retryable-task" class="inline-action" type="button" title="定位最近可重试任务" disabled>定位错误</button>
+      </div>
+      <div id="tasks-list" class="list runtime-log-list log-console"></div>
+    </section>
+
+    <div id="account-delete-modal" class="modal-backdrop account-delete-backdrop" hidden>
+      <section class="modal account-delete-modal" role="dialog" aria-modal="true" aria-labelledby="account-delete-title" aria-describedby="account-delete-message">
+        <div class="account-delete-head">
+          <span class="delete-modal-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path>
+              <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              <line x1="10" y1="11" x2="10" y2="17"></line>
+              <line x1="14" y1="11" x2="14" y2="17"></line>
+            </svg>
+          </span>
+          <div>
+            <span class="eyebrow">删除账号</span>
+            <h2 id="account-delete-title">确认删除选中账号</h2>
+            <p id="account-delete-message">默认只删除本地账号记录。需要同时清理 Overleaf 项目的账号，请在下面单独勾选。</p>
+          </div>
+        </div>
+        <div id="account-delete-list" class="account-delete-list"></div>
+        <div class="account-delete-actions">
+          <button id="account-delete-cancel" class="inline-action" type="button">取消</button>
+          <button id="account-delete-submit" class="inline-action danger-action" type="button">确认删除</button>
+        </div>
+      </section>
+    </div>
+
+    <script src="/ui/app.js?v=20260821-runtime158" defer></script>
+  </body>
+</html>

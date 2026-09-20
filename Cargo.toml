@@ -1,0 +1,16 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/storage",
+    "crates/overleaf-api",
+    "crates/browser",
+    "crates/workflows",
+    "crates/service",
+    "apps/desktop/src-tauri",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"

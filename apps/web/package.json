@@ -1,0 +1,11 @@
+{
+  "name": "overleaf-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --serve"
+  },
+  "dependencies": { "lucide": "^0.577.0" },
+  "devDependencies": { "esbuild": "^0.25.0" }
+}

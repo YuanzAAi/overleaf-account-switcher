@@ -1,0 +1,32 @@
+[package]
+name = "overleaf-desktop"
+version = "0.1.0"
+description = "Native desktop shell for Overleaf Account Switcher"
+authors = ["YuanzAAi"]
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+default-run = "overleaf-desktop"
+
+[build-dependencies]
+tauri-build = { version = "2.0.0", default-features = false, features = ["config-json"] }
+
+[dependencies]
+arboard = "3.6.1"
+overleaf-browser = { path = "../../../crates/browser" }
+overleaf-service = { path = "../../../crates/service" }
+overleaf-storage = { path = "../../../crates/storage" }
+tauri = { version = "2.0.0", default-features = false, features = ["tray-icon", "wry"] }
+tauri-plugin-dialog = "2.7.1"
+tempfile = "3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde_json = "1"
+sha2 = "0.10"
+dunce = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }

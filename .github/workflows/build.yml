@@ -1,0 +1,165 @@
+name: Build and Release
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  desktop:
+    name: Desktop (${{ matrix.name }})
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x64
+          - os: macos-15
+            target: aarch64-apple-darwin
+            name: macos-arm64
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            name: macos-x64
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_BUILD_JOBS: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - run: npm --prefix apps/web ci
+      - run: npm --prefix apps/desktop ci
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/package-desktop.ps1
+      - name: Verify Windows portable update
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $install = Join-Path $env:RUNNER_TEMP 'overleaf-update-smoke'
+          $stage = Join-Path $install '.overleaf-update-smoke'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          $target = Join-Path $install 'overleaf-desktop.exe'
+          [IO.File]::WriteAllText($target, 'previous-version-fixture')
+          Copy-Item target/desktop-package/overleaf-windows-x64-portable.zip (Join-Path $stage 'payload.zip')
+          & ./apps/desktop/src-tauri/src/updates/windows.ps1 -ParentProcessId 2147483647 -Target $target -Stage $stage
+          $expected = (Get-FileHash target/desktop-package/overleaf-windows-x64.exe).Hash
+          if ((Get-FileHash $target).Hash -ne $expected) { throw 'Installed EXE differs from release asset' }
+          if (Test-Path $stage) { throw 'Update staging directory was not cleaned' }
+          $ready = $false
+          try {
+            for ($attempt = 0; $attempt -lt 30; $attempt++) {
+              try {
+                $config = Invoke-RestMethod http://127.0.0.1:8765/config -TimeoutSec 2
+                $expectedVersion = (Get-Content apps/desktop/src-tauri/tauri.conf.json | ConvertFrom-Json).version
+                if ($config.app_version -eq $expectedVersion) { $ready = $true; break }
+              } catch {}
+              Start-Sleep -Seconds 1
+            }
+            if (-not $ready) { throw 'Updated application did not start its service' }
+          } finally {
+            Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $target } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          }
+      - if: runner.os == 'macOS'
+        run: bash scripts/package-macos.sh '${{ matrix.target }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.name }}
+          path: |
+            target/desktop-package/*-portable.zip
+            target/desktop-package/overleaf-windows-x64.exe
+          if-no-files-found: error
+          compression-level: 0
+  docker:
+    name: Docker (amd64 / arm64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v3
+      - if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: latest=false
+          tags: |
+            type=ref,event=tag
+            type=sha
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+  release:
+    name: Publish Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [desktop, docker]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: release
+          merge-multiple: true
+      - name: Verify assets and generate checksums
+        working-directory: release
+        run: |
+          test -s overleaf-windows-x64.exe
+          test -s overleaf-windows-x64-portable.zip
+          test -s overleaf-macos-arm64-portable.zip
+          test -s overleaf-macos-x64-portable.zip
+          sha256sum ./*.exe ./*.zip > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          body: |
+            Windows: standalone EXE or portable ZIP.
+            macOS: portable ZIP for Apple Silicon (arm64) or Intel (x64).
+
+            Docker (amd64 / arm64): `${{ needs.docker.outputs.image }}:${{ github.ref_name }}`
+          files: |
+            release/overleaf-windows-x64.exe
+            release/*-portable.zip
+            release/SHA256SUMS

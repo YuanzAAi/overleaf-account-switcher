@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Overleaf Account Switcher - 扩展安装指南</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .step {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+
+        .step-number {
+            display: inline-block;
+            width: 32px;
+            height: 32px;
+            background: #667eea;
+            color: white;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 32px;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+
+        .step h3 {
+            display: inline-block;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .step p {
+            margin-left: 42px;
+            color: #666;
+        }
+
+        .code {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+
+        .success {
+            background: #d4edda;
+            border-left-color: #28a745;
+            color: #155724;
+        }
+
+        .warning {
+            background: #fff3cd;
+            border-left-color: #ffc107;
+            color: #856404;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #ffc107;
+        }
+
+        .feature-list {
+            list-style: none;
+            margin: 20px 0;
+        }
+
+        .feature-list li {
+            padding: 10px 0;
+            padding-left: 30px;
+            position: relative;
+        }
+
+        .feature-list li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #28a745;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 20px;
+            background: #f8f9fa;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Overleaf Account Switcher</h1>
+            <p>Chrome扩展安装指南</p>
+        </div>
+
+        <div class="content">
+            <div class="warning">
+                <strong>重要提示：</strong>无感换号功能需要安装此 Chrome 扩展才能使用。扩展连接本地服务与 Chrome 浏览器，负责读取和设置 Overleaf 登录 Cookie。
+            </div>
+
+            <h2 style="margin-bottom: 20px;">✨ 功能特点</h2>
+            <ul class="feature-list">
+                <li>通过 WebSocket 与本地服务实时通信</li>
+                <li>支持读取和设置网页脚本无法访问的 httpOnly Cookie</li>
+                <li>自动重连机制，稳定可靠</li>
+                <li>完全静默运行，无UI干扰</li>
+                <li>仅访问Overleaf域名，安全可控</li>
+                <li>无需重启Chrome，真正无感切换</li>
+            </ul>
+
+            <h2 style="margin: 30px 0 20px 0;">📦 安装步骤</h2>
+
+            <div class="step">
+                <span class="step-number">1</span>
+                <h3>打开Chrome扩展管理页面</h3>
+                <p>在Chrome地址栏输入以下地址并回车：</p>
+                <div class="code">chrome://extensions/</div>
+            </div>
+
+            <div class="step">
+                <span class="step-number">2</span>
+                <h3>开启开发者模式</h3>
+                <p>在页面右上角找到「开发者模式」开关，将其打开</p>
+            </div>
+
+            <div class="step">
+                <span class="step-number">3</span>
+                <h3>加载扩展</h3>
+                <p>点击左上角的「加载已解压的扩展程序」按钮</p>
+            </div>
+
+            <div class="step">
+                <span class="step-number">4</span>
+                <h3>选择扩展文件夹</h3>
+                <p>在弹出的文件选择对话框中，找到并选择 <code>chrome_extension</code> 文件夹</p>
+                <div class="code">chrome_extension（内含 manifest.json）</div>
+            </div>
+
+            <div class="step">
+                <span class="step-number">5</span>
+                <h3>确认安装</h3>
+                <p>点击「选择文件夹」按钮，扩展将自动安装</p>
+            </div>
+
+            <div class="step success">
+                <span class="step-number">✓</span>
+                <h3>完成！</h3>
+                <p>本地服务运行时，扩展会自动连接。回到桌面程序或 WebUI，可在顶部或「设置运行」查看扩展桥连接状态。</p>
+            </div>
+
+            <h2 style="margin: 30px 0 20px 0;">🎯 使用方法</h2>
+
+            <div class="step">
+                <h3>1. 启动程序</h3>
+                <p>启动桌面程序或 Docker 服务，扩展将通过本机端口 9876 自动连接</p>
+            </div>
+
+            <div class="step">
+                <h3>2. 打开Overleaf</h3>
+                <p>在Chrome中访问 <code>https://www.overleaf.com</code></p>
+            </div>
+
+            <div class="step">
+                <h3>3. 无感换号</h3>
+                <p>在「账号管理」选择目标账号，点击「无感换号」</p>
+            </div>
+
+            <div class="step">
+                <h3>4. 确认切换结果</h3>
+                <p>换号完成后，Overleaf 标签页会自动刷新；如仍显示原账号，可按 <code>F5</code> 再次刷新</p>
+            </div>
+
+            <h2 style="margin: 30px 0 20px 0;">❓ 常见问题</h2>
+
+            <div class="step">
+                <h3>Q: 扩展无法连接到本地服务？</h3>
+                <p>请确认桌面程序或 Docker 服务正在运行、端口 9876 可用，并在顶部或「设置运行」查看扩展桥连接状态。</p>
+            </div>
+
+            <div class="step">
+                <h3>Q: Cookie设置失败？</h3>
+                <p>请检查：<br>
+                1. 目标账号的Cookie是否有效<br>
+                2. Chrome是否允许扩展访问Overleaf域名<br>
+                3. 扩展是否已正确安装并启用</p>
+            </div>
+
+            <div class="step">
+                <h3>Q: 需要重启Chrome吗？</h3>
+                <p>不需要！这正是使用扩展方案的优势，完全无感切换，无需关闭或重启浏览器。</p>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>Made with ❤️ | Overleaf Account Switcher</p>
+        </div>
+    </div>
+</body>
+</html>

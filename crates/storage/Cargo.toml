@@ -1,0 +1,26 @@
+[package]
+name = "overleaf-storage"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "overleaf_storage"
+path = "src/lib.rs"
+
+[dependencies]
+overleaf-core = { path = "../core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+keyring = { version = "3.6.3", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3.6.3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6.3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust"] }

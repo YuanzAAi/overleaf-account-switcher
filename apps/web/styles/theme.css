@@ -1,0 +1,610 @@
+/* 主题和共用控件。 */
+@font-face {
+  font-family: "Inter";
+  src: url("../assets/inter.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Space Mono";
+  src: url("../assets/space-mono.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Playfair Display";
+  src: url("../assets/playfair-display.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+:root {
+  color-scheme: light;
+  --paper: #f5f7fa;
+  --surface: #ffffff;
+  --surface-soft: #e9edf2;
+  --ink: #050608;
+  --muted: #68707d;
+  --line: #0506081c;
+  --edge: #05060845;
+  --glass-border: #ffffffb3;
+  --glass-highlight: inset 0 1px 0 #ffffffed, inset 0 0 0 1px #ffffff38;
+  --glass-blur: blur(28px) saturate(1.15);
+  --glass-raised: linear-gradient(135deg, #ffffffee, #f4f7fbd9);
+  --queue-tint: #c5b9e938;
+  --queue-ink: #625381;
+  --accent: var(--ink);
+  --accent-soft: var(--surface-soft);
+  --interaction-fill: #b9c9e1;
+  --interaction-pressed: #a8bddb;
+  --interaction-ink: #111111;
+  --interaction-border: #899fbe;
+  --action-fill: #111111;
+  --action-ink: #f5f5f2;
+  --action-selected: #ffffff;
+  --action-selected-ink: #222222;
+  --control-fill: #ffffff;
+  --control-ink: #050608;
+  --control-edge: #05060824;
+  --status-ok: #178348;
+  --status-ok-glow: none;
+  --orange: var(--muted);
+  --orange-soft: var(--surface-soft);
+  --red: #c94235;
+  --red-soft: #fde2dd;
+  --gold: #86600c;
+  --gold-soft: #f5df8c;
+  --inverse: #fffefa;
+  --shadow: 0 12px 28px #18212d14;
+  --theme-wash: #b9c9e133;
+  --theme-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --font: "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: "Space Mono", "Cascadia Mono", "Microsoft YaHei", monospace;
+  --display: "Playfair Display", "Noto Serif SC", "Songti SC", "SimSun", serif;
+  --header-height: 60px;
+  --sidebar-width: 156px;
+  --log-height: clamp(180px, 28dvh, 300px);
+}
+body[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #030407;
+  --surface: #101216;
+  --surface-soft: #1b1f27;
+  --ink: #f5f7fa;
+  --muted: #9da5b1;
+  --line: #ffffff1c;
+  --edge: #ffffff4a;
+  --glass-border: #ffffff24;
+  --glass-highlight: inset 0 1px 1px #ffffff1c, inset 0 0 0 1px #ffffff04;
+  --glass-raised: linear-gradient(135deg, #ffffff12, #ffffff04), #11141ae8;
+  --queue-tint: #c5b9e914;
+  --queue-ink: #d3c8ec;
+  --accent: var(--ink);
+  --accent-soft: var(--surface-soft);
+  --orange: var(--muted);
+  --orange-soft: var(--surface-soft);
+  --interaction-border: #b9c9e1;
+  --action-fill: #111111;
+  --action-ink: #f5f5f2;
+  --action-selected: #f1f3f5;
+  --action-selected-ink: #22262c;
+  --control-fill: #1b1f27;
+  --control-ink: #f2f4f7;
+  --control-edge: #ffffff26;
+  --status-ok: #4ade80;
+  --status-ok-glow: 0 0 6px #4ade802b;
+  --red: #f38c80;
+  --red-soft: #3d2426;
+  --gold: #edc76a;
+  --gold-soft: #383022;
+  --inverse: #151516;
+  --shadow: 0 16px 36px #0009;
+  --theme-wash: #8ba3cc3d;
+}
+* {
+  box-sizing: border-box;
+  letter-spacing: 0;
+}
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+}
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font: 13px/1.5 var(--font);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 600ms var(--theme-ease), color 600ms var(--theme-ease);
+}
+html {
+  background: var(--paper);
+  transition: background-color 600ms var(--theme-ease), color 600ms var(--theme-ease);
+}
+html::after {
+  content: "";
+  position: fixed;
+  inset: -25%;
+  z-index: 300;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(circle at var(--theme-x, 96%) var(--theme-y, 92%), var(--theme-wash), transparent 44%);
+  transform: scale(0.4);
+}
+html.theme-transitioning::after {
+  animation: theme-wash 620ms var(--theme-ease) both;
+}
+html.theme-transitioning,
+html.theme-transitioning * {
+  transition-property: background-color, color, border-color, box-shadow, fill, stroke, opacity;
+  transition-duration: 600ms;
+  transition-timing-function: var(--theme-ease);
+}
+@keyframes theme-wash {
+  0% { opacity: 0; transform: scale(0.4); }
+  34% { opacity: 0.9; }
+  100% { opacity: 0; transform: scale(1.35); }
+}
+[hidden] {
+  display: none !important;
+}
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+h1 {
+  font-size: 17px;
+  font-weight: 700;
+}
+h2 {
+  font-size: 20px;
+  font-weight: 650;
+  font-family: var(--display);
+}
+h3 {
+  font-size: 14px;
+  font-weight: 650;
+}
+a {
+  color: var(--accent);
+  text-underline-offset: 3px;
+}
+svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  vertical-align: middle;
+}
+button,
+input,
+select,
+textarea,
+summary {
+  font: inherit;
+  color: inherit;
+}
+button,
+summary {
+  -webkit-tap-highlight-color: transparent;
+}
+button,
+summary.ui-btn,
+a.ui-btn,
+.compact-select-trigger {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 13px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 20px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 180ms ease-out,
+    color 180ms ease-out,
+    border-color 180ms ease-out,
+    box-shadow 180ms ease-out,
+    transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+button:not(:disabled):hover,
+a.ui-btn:hover,
+summary:hover {
+  background: var(--interaction-fill);
+  color: var(--interaction-ink);
+  border-color: var(--interaction-border);
+}
+button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+:focus-visible {
+  outline: 2px solid var(--interaction-border);
+  outline-offset: 3px;
+}
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 7px 10px;
+  min-height: 34px;
+  outline: none;
+  font-size: 12px;
+}
+input:not([type="checkbox"]):not([type="radio"]):focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--queue-ink) 45%, var(--line));
+  box-shadow: 0 0 0 2px var(--queue-tint);
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 0.8;
+}
+textarea {
+  resize: vertical;
+  min-height: 74px;
+  line-height: 1.6;
+}
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--interaction-fill);
+  outline: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+input:disabled,
+select:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 0;
+}
+label.check-row,
+.check-row {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink);
+  white-space: nowrap;
+}
+code,
+pre {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+code {
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-soft);
+  overflow-wrap: anywhere;
+}
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.muted,
+.eyebrow {
+  color: var(--muted);
+}
+.eyebrow {
+  font: 11px/1.7 var(--mono);
+}
+.visually-hidden,
+.compact-native-select {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0 !important;
+}
+.icon-btn,
+.account-toolbar-icon-button,
+.account-toolbar-button,
+.compact-select-trigger,
+.account-bulk-row-actions > button,
+.clear-selection-action,
+.account-add-trigger {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+}
+.copy-btn {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  padding: 2px;
+  border: 0;
+  color: var(--muted);
+}
+.copy-btn svg {
+  width: 13px;
+  height: 13px;
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+.copy-btn-compact {
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  padding: 1px;
+}
+.copy-btn-compact svg {
+  width: 11px;
+  height: 11px;
+}
+body[data-theme] .copy-btn:not(:disabled):is(:hover, :active) {
+  color: var(--ink);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.copy-btn:hover svg {
+  transform: translateY(-1px) scale(1.12);
+}
+.copy-btn:active svg {
+  transform: scale(0.92);
+}
+.copy-btn.copied {
+  opacity: 1;
+  color: var(--status-ok);
+}
+.copy-btn.copied svg {
+  transform: none;
+  animation: copy-confirm 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes copy-confirm {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+button.busy,
+.account-assist-entry-active,
+.compact-select.active > summary,
+.account-assist-entry-active:hover,
+.compact-select.active > summary:hover {
+  background: var(--interaction-fill);
+  color: var(--interaction-ink);
+  border-color: var(--interaction-border);
+}
+body[data-theme] button:not(:disabled):active,
+body[data-theme] summary:active {
+  background: var(--interaction-pressed);
+  color: var(--interaction-ink);
+  border-color: var(--interaction-border);
+}
+/* 四个主动作使用黑白按键，其余控件保持中性。 */
+body[data-theme] :is(
+  #switch-execute, #registration-submit, #card-submit, #address-submit,
+  .account-primary-switch.ready
+) {
+  background: var(--action-fill);
+  color: var(--action-ink);
+  border-color: var(--action-fill);
+  box-shadow: 0 4px 10px #1111111c;
+  font-family: "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-weight: 500;
+  transition: background-color 260ms ease, color 260ms ease, border-color 260ms ease, box-shadow 220ms ease, transform 180ms ease;
+}
+body[data-theme] .account-primary-switch:not(.active) {
+  background: var(--action-fill);
+  color: var(--action-ink);
+  border-color: var(--action-fill);
+  box-shadow: 0 4px 10px #1111111c;
+  font-family: "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-weight: 500;
+  transition: background-color 260ms ease, color 260ms ease, border-color 260ms ease, box-shadow 220ms ease, transform 180ms ease;
+}
+body[data-theme] .account-primary-switch.unavailable {
+  opacity: 1;
+  cursor: not-allowed;
+  background: var(--action-fill);
+  color: var(--action-ink);
+  border-color: var(--action-fill);
+}
+body[data-theme] :is(
+  #switch-execute, #registration-submit, #card-submit, #address-submit,
+  .account-primary-switch.ready
+):is(:hover, :focus-visible, :active, .busy) {
+  background: var(--action-selected);
+  color: var(--action-selected-ink);
+  border-color: var(--line);
+  box-shadow: 0 6px 16px #1111111a;
+}
+body[data-theme] .account-primary-switch:not(.active):is(:hover, :focus-visible, :active) {
+  background: var(--action-selected);
+  color: var(--action-selected-ink);
+  border-color: var(--line);
+  box-shadow: 0 6px 16px #1111111a;
+}
+body[data-theme] .account-primary-switch:not(.active):not(:disabled):active {
+  transform: translateY(1px);
+  box-shadow: inset 0 1px 3px #11111118;
+}
+body[data-theme] :is(
+  #switch-execute, #registration-submit, #card-submit, #address-submit,
+  .account-primary-switch.ready
+):not(:disabled):active {
+  transform: translateY(1px);
+  box-shadow: inset 0 1px 3px #11111118;
+}
+body[data-theme] .account-primary-switch.active {
+  background: var(--action-selected);
+  color: var(--action-selected-ink);
+  border-color: var(--line);
+}
+body[data-theme] :is(.topbar-controls button, .sidebar-footer button, .account-add-trigger) {
+  background: var(--control-fill);
+  color: var(--control-ink);
+  border-color: var(--control-edge);
+  box-shadow: none;
+  font-family: "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-weight: 500;
+}
+body[data-theme] :is(.topbar-controls button, .sidebar-footer button, .account-add-trigger):is(:hover, :focus-visible, :active) {
+  background: var(--interaction-fill);
+  color: var(--interaction-ink);
+  border-color: var(--interaction-border);
+  box-shadow: inset 0 1px 0 #ffffff66;
+}
+.ui-tag,
+.pill,
+.account-plan-badge,
+.runtime-log-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 550;
+  line-height: 16px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.ui-tag-green,
+.pill.present,
+.pill.valid,
+.pill.completed,
+.pill.eligible,
+.pill.imported,
+.pill.new,
+.runtime-log-state.state-active {
+  color: var(--muted);
+  background: var(--surface-soft);
+  border-color: var(--line);
+}
+.ui-tag-blue,
+.pill.running,
+.pill.pending,
+.pill.available {
+  color: var(--muted);
+  background: var(--surface-soft);
+  border-color: var(--line);
+}
+.ui-tag-red,
+.pill.failed,
+.pill.expired,
+.pill.missing,
+.runtime-log-state.state-failed {
+  color: var(--red);
+  background: var(--red-soft);
+  border-color: transparent;
+}
+.ui-tag-orange,
+.pill.waiting,
+.pill.stale,
+.pill.used,
+.pill.needs_refresh,
+.runtime-log-state.state-waiting {
+  color: var(--orange);
+  background: var(--orange-soft);
+  border-color: transparent;
+}
+.account-plan-badge-pro {
+  color: var(--gold);
+  background: var(--gold-soft);
+  border-color: var(--gold);
+  font-weight: 750;
+}
+.account-plan-badge-trial {
+  color: var(--ink);
+  background: var(--surface-soft);
+  border-color: var(--line);
+}
+.ui-tag:empty {
+  display: none;
+}
+.status-led {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--red);
+  flex: 0 0 auto;
+}
+.status-led.on {
+  background: var(--status-ok);
+  box-shadow: var(--status-ok-glow);
+}
+.status-led.warn {
+  background: var(--orange);
+}
+.spinning svg {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes surface-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.modal,
+.password-selection-assist,
+.page-panel.active > .page-header {
+  animation: surface-enter 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.card-footer-icons svg {
+  transition: transform 180ms ease-out;
+}
+.card-footer-icons button:hover svg {
+  transform: translateY(-1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .account-card,
+  .account-card.card-selected,
+  .account-card.card-selected:hover {
+    transform: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

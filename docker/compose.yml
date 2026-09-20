@@ -1,0 +1,34 @@
+name: overleaf-account-switcher
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: ${OVERLEAF_IMAGE:-overleaf-account-switcher:local}
+    environment:
+      OVERLEAF_SWITCHER_BROWSER_VIEWER_PORT: ${OVERLEAF_BROWSER_PORT:-6080}
+    ports:
+      - "127.0.0.1:${OVERLEAF_WEB_PORT:-8765}:8765"
+      - "127.0.0.1:${OVERLEAF_BRIDGE_PORT:-9876}:9876"
+      - "127.0.0.1:${OVERLEAF_BROWSER_PORT:-6080}:6080"
+    volumes:
+      - data:/data
+      - ${CODEX_HOME:-${USERPROFILE:-${HOME}}/.codex}/skills:/home/overleaf/.codex/skills
+      - ${CODEX_HOME:-${USERPROFILE:-${HOME}}/.codex}/overleaf-skills:/home/overleaf/.codex/overleaf-skills
+      - ${CLAUDE_CONFIG_DIR:-${USERPROFILE:-${HOME}}/.claude}/skills:/home/overleaf/.claude/skills
+      - ${CLAUDE_CONFIG_DIR:-${USERPROFILE:-${HOME}}/.claude}/overleaf-skills:/home/overleaf/.claude/overleaf-skills
+    secrets:
+      - keyring_password
+    shm_size: 512mb
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    mem_limit: 2g
+    pids_limit: 512
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+secrets:
+  keyring_password:
+    file: ../.docker-keyring-password
+volumes:
+  data:

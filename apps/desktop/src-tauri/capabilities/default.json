@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-desktop-bridge",
+  "description": "Allow the main window to use Tauri core APIs and native dialogs for the embedded Overleaf Account Switcher UI.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:8765/*"]
+  },
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "allow-desktop-bridge"
+  ]
+}

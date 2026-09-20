@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Overleaf Account Switcher Bridge",
+  "version": "1.0.0",
+  "description": "桥接本地 Rust service / GUI 与 Chrome，实现 Overleaf 账号无感切换",
+  "permissions": [
+    "cookies",
+    "storage",
+    "alarms",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*.overleaf.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}
