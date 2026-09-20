@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 jobs:
   desktop:
@@ -86,8 +86,16 @@ jobs:
           if-no-files-found: error
           compression-level: 0
   docker:
-    name: Docker (amd64 / arm64)
-    runs-on: ubuntu-24.04
+    name: Docker (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            os: ubuntu-24.04
+          - arch: arm64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     permissions:
       contents: read
@@ -99,9 +107,6 @@ jobs:
       - id: image
         shell: bash
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-qemu-action@v4.4.0
-        with:
-          platforms: arm64
       - uses: docker/setup-buildx-action@v4.4.1
       - if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: docker/login-action@v4.6.0
@@ -118,20 +123,74 @@ jobs:
             type=ref,event=tag
             type=sha
             type=raw,value=latest,enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
-      - uses: docker/build-push-action@v7.4.0
+      - id: build
+        uses: docker/build-push-action@v7.4.0
         with:
           context: .
           file: docker/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
-          tags: ${{ steps.metadata.outputs.tags }}
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
           labels: ${{ steps.metadata.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
+          cache-to: type=gha,scope=docker-${{ matrix.arch }},mode=max
+      - name: Export image digest
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v7.0.1
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: docker-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          retention-days: 1
+          if-no-files-found: error
+  docker-manifest:
+    name: Publish multi-platform image
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: docker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ needs.docker.outputs.image }}
+    env:
+      IMAGE: ${{ needs.docker.outputs.image }}
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: docker-digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Merge and verify platforms
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          sources=()
+          for digest in *; do
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+            sources+=("$IMAGE@sha256:$digest")
+          done
+          test "${#sources[@]}" -eq 2
+          tags=(--tag "$IMAGE:$GITHUB_REF_NAME" --tag "$IMAGE:sha-${GITHUB_SHA:0:7}")
+          if [[ "$GITHUB_REF_NAME" != *-* ]]; then tags+=(--tag "$IMAGE:latest"); fi
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+          docker buildx imagetools inspect "$IMAGE:$GITHUB_REF_NAME" --raw |
+            jq -e '[.manifests[].platform | select(.os == "linux") | .architecture] | unique | sort == ["amd64", "arm64"]'
   release:
     name: Publish Release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [desktop, docker]
+    needs: [desktop, docker-manifest]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -158,7 +217,7 @@ jobs:
             Windows: standalone EXE or portable ZIP.
             macOS: portable ZIP for Apple Silicon (arm64) or Intel (x64).
 
-            Docker (amd64 / arm64): `${{ needs.docker.outputs.image }}:${{ github.ref_name }}`
+            Docker (amd64 / arm64): `${{ needs.docker-manifest.outputs.image }}:${{ github.ref_name }}`
           files: |
             release/overleaf-windows-x64.exe
             release/*-portable.zip
