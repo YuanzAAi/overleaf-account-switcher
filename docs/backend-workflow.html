@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 2.17.0-dev.1">
-  <title>Overleaf Account Switcher</title>
+  <title>后端任务执行 · 无感换号链路</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -5081,7 +5081,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
            data-preset-badge-blueprint="蓝图 / 修订 01"
            data-preset-badge-editorial="编辑风格 / 现场笔记">
         <div class="pulse-dot"></div>
-        <h1>Overleaf Account Switcher</h1>
+        <h1>后端任务执行 · 无感换号链路</h1>
       </div>
     </div>
 
@@ -5130,9 +5130,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / 图版 04">
-      <svg viewBox="0 0 1240 620" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
-        <title id="archify-diagram-title">Overleaf Account Switcher</title>
-        <desc id="archify-diagram-description">由 Archify 生成的架构图。</desc>
+      <svg viewBox="0 0 1218 534" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
+        <title id="archify-diagram-title">后端任务执行 · 无感换号链路</title>
+        <desc id="archify-diagram-description">由 Archify 生成的工作流图。</desc>
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -5155,176 +5155,249 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <!-- Background Grid -->
         <rect width="100%" height="100%" fill="url(#grid)" />
 
-        <!-- Boundaries (behind everything) -->
+        <!-- Swimlanes -->
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-0" x="40" y="52" width="1104" height="106" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / 请求与执行</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-1" x="40" y="178" width="1104" height="106" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-1-exception" x="46" y="184" width="1092" height="94" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="54" y="200" class="t-security" font-size="10" font-weight="600">EX / 恢复与异常</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-2" x="40" y="304" width="1104" height="106" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="326" class="t-dim" font-size="10" font-weight="600">03 / 写回与反馈</text>
+
+        <!-- Phase headers -->
 
 
-        <!-- Connection paths (before components for correct z-order) -->
-        <path data-edge-from="agents" data-edge-to="skills" data-edge-label="Python CLI" data-edge-key="0" data-edge-id="agent-cli" data-composition-points="230,87;350,87" d="M 230 87 L 350 87" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="skills" data-edge-to="overleaf" data-edge-label="Cookie / Git" data-edge-key="1" data-edge-id="skills-cloud" data-composition-points="540,87;1095,87;1095,275" d="M 540 87 L 1087 87 Q 1095 87 1095 95 L 1095 275" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="workbench" data-edge-to="service" data-edge-label="HTTP / SSE" data-edge-key="2" data-edge-id="ui-api" data-composition-points="230,312;350,312" d="M 230 312 L 350 312" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="service" data-edge-to="operations" data-edge-label="任务执行" data-edge-key="3" data-edge-id="task-dispatch" data-composition-points="540,312;665,312" d="M 540 312 L 665 312" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="operations" data-edge-to="overleaf" data-edge-label="HTTPS" data-edge-key="4" data-edge-id="remote-api" data-composition-points="855,312;990,312" d="M 855 312 L 990 312" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="service" data-edge-to="skills" data-edge-label="凭据同步" data-edge-key="5" data-edge-id="credentials-sync" data-composition-points="445,275;445,124" d="M 445 275 L 445 124" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="service" data-edge-to="storage" data-edge-label="读写 / 加密引用" data-edge-key="6" data-edge-id="persist-data" data-composition-points="445,349;445,500" d="M 445 349 L 445 500" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="operations" data-edge-to="automation" data-edge-label="CDP" data-edge-key="7" data-edge-id="browser-cdp" data-composition-points="753,349;753,424.5;770,424.5;770,500" d="M 753 349 L 753 416.5 Q 753 424.5 761 424.5 L 762 424.5 Q 770 424.5 770 432.5 L 770 500" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="operations" data-edge-to="extension" data-edge-label="WebSocket" data-edge-key="8" data-edge-id="extension-bridge" data-composition-points="767,349;767,373;966,373;966,537;990,537" d="M 767 349 L 767 365 Q 767 373 775 373 L 958 373 Q 966 373 966 381 L 966 529 Q 966 537 974 537 L 990 537" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="extension" data-edge-to="overleaf" data-edge-label="浏览器会话" data-edge-key="9" data-edge-id="browser-session" data-composition-points="1095,500;1095,349" d="M 1095 500 L 1095 349" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <!-- Workflow groups -->
 
-        <!-- Components -->
-        <g id="node-agents" data-node-id="agents" data-node-label="Agents" tabindex="0" role="button" aria-label="聚焦Agents，Codex / Claude Code, 架构组件" aria-pressed="false" data-node-kind="external" data-node-sublabel="Codex / Claude Code" data-node-context="架构组件">
-          <title>Agents · Codex / Claude Code · 架构组件</title>
-          <rect x="40" y="50" width="190" height="74" rx="6" class="c-mask"/>
-          <rect x="40" y="50" width="190" height="74" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(46 56) scale(0.6875)">
-            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
-            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="135" y="85" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Agents</text>
-        <text data-detail="context" x="135" y="101" class="t-muted" font-size="9" text-anchor="middle">Codex / Claude Code</text>
-        </g>
 
-        <g id="node-skills" data-node-id="skills" data-node-label="overleaf-skills" tabindex="0" role="button" aria-label="聚焦overleaf-skills，项目编辑 / 编译 / PDF, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel="项目编辑 / 编译 / PDF" data-node-context="架构组件">
-          <title>overleaf-skills · 项目编辑 / 编译 / PDF · 架构组件</title>
-          <rect x="350" y="50" width="190" height="74" rx="6" class="c-mask"/>
-          <rect x="350" y="50" width="190" height="74" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(356 56) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="445" y="85" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">overleaf-skills</text>
-        <text data-detail="context" x="445" y="101" class="t-muted" font-size="9" text-anchor="middle">项目编辑 / 编译 / PDF</text>
-        </g>
+        <!-- Edge paths -->
+        <path data-edge-from="bridge" data-edge-to="persist" data-edge-label="三条回执成功" data-edge-key="0" data-edge-id="acknowledged" data-composition-points="1136,120;1199.6,120;1199.6,372;1136,372" d="M 1136 120 L 1199.6 120 L 1199.6 372 L 1136 372" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="skills" data-edge-to="result" data-edge-key="1" data-edge-id="complete" data-composition-points="479,398;479,426;123,426;123,406" d="M 479 398 L 479 426 L 123 426 L 123 406" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="background" data-edge-to="identity" data-edge-key="2" data-edge-id="execute" data-composition-points="554,120;620,120" d="M 554 120 L 620 120" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="migration" data-edge-to="bridge" data-edge-key="3" data-edge-id="migrated" data-composition-points="958,120;986,120" d="M 958 120 L 986 120" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="persist" data-edge-to="subscription" data-edge-key="4" data-edge-id="read-subscription" data-composition-points="986,372;770,372" d="M 986 372 L 770 372" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="request" data-edge-to="admission" data-edge-key="5" data-edge-id="receive" data-composition-points="198,120;226,120" d="M 198 120 L 226 120" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="identity" data-edge-to="recover" data-edge-label="Cookie 缺失 / 失效" data-edge-key="6" data-edge-id="recover-session" data-composition-points="688,146;688,168;786,168;786,246;770,246" d="M 688 146 L 688 168 L 786 168 L 786 246 L 770 246" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="failure" data-edge-to="result" data-edge-key="7" data-edge-id="report-failure" data-composition-points="301,272;301,365;198,365" d="M 301 272 L 301 365 L 198 365" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="recover" data-edge-to="identity" data-edge-label="恢复后续跑一次" data-edge-key="8" data-edge-id="resume" data-composition-points="695,280;695,300;604,300;604,120;620,120" d="M 695 280 L 695 300 L 604 300 L 604 120 L 620 120" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="admission" data-edge-to="background" data-edge-key="9" data-edge-id="schedule" data-composition-points="376,120;404,120" d="M 376 120 L 404 120" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="subscription" data-edge-to="skills" data-edge-label="更新或警告" data-edge-key="10" data-edge-id="sync-credentials" data-composition-points="620,372;554,372" d="M 620 372 L 554 372" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="recover" data-edge-to="failure" data-edge-label="无密码 / 恢复失败" data-edge-key="11" data-edge-id="unrecoverable" data-composition-points="620,246;376,246" d="M 620 246 L 376 246" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="identity" data-edge-to="migration" data-edge-label="有效" data-edge-key="12" data-edge-id="verified" data-composition-points="770,120;808,120" d="M 770 120 L 808 120" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
 
-        <g id="node-workbench" data-node-id="workbench" data-node-label="账号工作台" tabindex="0" role="button" aria-label="聚焦账号工作台，Desktop / Web UI, 架构组件" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="Desktop / Web UI" data-node-context="架构组件">
-          <title>账号工作台 · Desktop / Web UI · 架构组件</title>
-          <rect x="40" y="275" width="190" height="74" rx="6" class="c-mask"/>
-          <rect x="40" y="275" width="190" height="74" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(46 281) scale(0.6875)">
+        <!-- Nodes -->
+        <g id="node-request" data-node-id="request" data-node-label="HTTP 请求" tabindex="0" role="button" aria-label="聚焦HTTP 请求，runtime/server → api, 请求与执行" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="runtime/server → api" data-node-context="请求与执行">
+          <title>HTTP 请求 · runtime/server → api · 请求与执行</title>
+          <rect x="48" y="94" width="150" height="52" rx="6" class="c-mask"/>
+          <rect x="48" y="94" width="150" height="52" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(54 100) scale(0.6875)">
             <rect x="2" y="3" width="12" height="10" rx="2"/>
             <path d="M2 6.5h12"/>
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="135" y="310" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">账号工作台</text>
-        <text data-detail="context" x="135" y="326" class="t-muted" font-size="9" text-anchor="middle">Desktop / Web UI</text>
+          <text data-node-label="" data-detail-anchor="" x="123" y="115" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">HTTP 请求</text>
+          <text data-detail="context" x="123" y="132" class="t-muted" font-size="8" text-anchor="middle">runtime/server → api</text>
         </g>
 
-        <g id="node-service" data-node-id="service" data-node-label="Rust 服务" tabindex="0" role="button" aria-label="聚焦Rust 服务，任务编排 / 并发 / 日志, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel="任务编排 / 并发 / 日志" data-node-context="架构组件">
-          <title>Rust 服务 · 任务编排 / 并发 / 日志 · 架构组件</title>
-          <rect x="350" y="275" width="190" height="74" rx="6" class="c-mask"/>
-          <rect x="350" y="275" width="190" height="74" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(356 281) scale(0.6875)">
+        <g id="node-admission" data-node-id="admission" data-node-label="任务准入与账号锁" tabindex="0" role="button" aria-label="聚焦任务准入与账号锁，runtime/tasks, 请求与执行" aria-pressed="false" data-node-kind="security" data-node-sublabel="runtime/tasks" data-node-context="请求与执行">
+          <title>任务准入与账号锁 · runtime/tasks · 请求与执行</title>
+          <rect x="226" y="94" width="150" height="52" rx="6" class="c-mask"/>
+          <rect x="226" y="94" width="150" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(232 100) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="301" y="115" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">任务准入与账号锁</text>
+          <text data-detail="context" x="301" y="132" class="t-muted" font-size="8" text-anchor="middle">runtime/tasks</text>
+        </g>
+
+        <g id="node-background" data-node-id="background" data-node-label="后台执行" tabindex="0" role="button" aria-label="聚焦后台执行，ApiBackgroundJob, 请求与执行" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="ApiBackgroundJob" data-node-context="请求与执行">
+          <title>后台执行 · ApiBackgroundJob · 请求与执行</title>
+          <rect x="404" y="94" width="150" height="52" rx="6" class="c-mask"/>
+          <rect x="404" y="94" width="150" height="52" rx="6" class="c-messagebus" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(410 100) scale(0.6875)">
+            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
+            <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
+            <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
+            <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="479" y="115" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">后台执行</text>
+          <text data-detail="context" x="479" y="132" class="t-muted" font-size="8" text-anchor="middle">ApiBackgroundJob</text>
+        </g>
+
+        <g id="node-identity" data-node-id="identity" data-node-label="核验目标身份" tabindex="0" role="button" aria-label="聚焦核验目标身份，accounts/session, 请求与执行" aria-pressed="false" data-node-kind="backend" data-node-sublabel="accounts/session" data-node-context="请求与执行">
+          <title>核验目标身份 · accounts/session · 请求与执行</title>
+          <rect x="620" y="94" width="150" height="52" rx="6" class="c-mask"/>
+          <rect x="620" y="94" width="150" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(626 100) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="445" y="310" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Rust 服务</text>
-        <text data-detail="context" x="445" y="326" class="t-muted" font-size="9" text-anchor="middle">任务编排 / 并发 / 日志</text>
+          <text data-node-label="" data-detail-anchor="" x="695" y="115" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">核验目标身份</text>
+          <text data-detail="context" x="695" y="132" class="t-muted" font-size="8" text-anchor="middle">accounts/session</text>
         </g>
 
-        <g id="node-operations" data-node-id="operations" data-node-label="账号与项目操作" tabindex="0" role="button" aria-label="聚焦账号与项目操作，登录态 / 订阅 / 迁移, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel="登录态 / 订阅 / 迁移" data-node-context="架构组件">
-          <title>账号与项目操作 · 登录态 / 订阅 / 迁移 · 架构组件</title>
-          <rect x="665" y="275" width="190" height="74" rx="6" class="c-mask"/>
-          <rect x="665" y="275" width="190" height="74" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(671 281) scale(0.6875)">
+        <g id="node-migration" data-node-id="migration" data-node-label="按需迁移项目" tabindex="0" role="button" aria-label="聚焦按需迁移项目，projects/migration, 请求与执行" aria-pressed="false" data-node-kind="backend" data-node-sublabel="projects/migration" data-node-tag="复制 / 重新加入 / 核验访问" data-node-context="请求与执行">
+          <title>按需迁移项目 · projects/migration · 请求与执行 · 复制 / 重新加入 / 核验访问</title>
+          <rect x="808" y="86" width="150" height="68" rx="6" class="c-mask"/>
+          <rect x="808" y="86" width="150" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(814 92) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="760" y="310" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">账号与项目操作</text>
-        <text data-detail="context" x="760" y="326" class="t-muted" font-size="9" text-anchor="middle">登录态 / 订阅 / 迁移</text>
+          <text data-node-label="" data-detail-anchor="" x="883" y="107" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">按需迁移项目</text>
+          <text data-detail="context" x="883" y="124" class="t-muted" font-size="8" text-anchor="middle">projects/migration</text>
+        <text data-detail="fine" x="883" y="142" class="t-backend" font-size="7" text-anchor="middle">复制 / 重新加入 / 核验访问</text>
         </g>
 
-        <g id="node-overleaf" data-node-id="overleaf" data-node-label="Overleaf" tabindex="0" role="button" aria-label="聚焦Overleaf，账号 / 项目 / 云端编译, 架构组件" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="账号 / 项目 / 云端编译" data-node-context="架构组件">
-          <title>Overleaf · 账号 / 项目 / 云端编译 · 架构组件</title>
-          <rect x="990" y="275" width="210" height="74" rx="6" class="c-mask"/>
-          <rect x="990" y="275" width="210" height="74" rx="6" class="c-cloud" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(996 281) scale(0.6875)">
-            <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
+        <g id="node-bridge" data-node-id="bridge" data-node-label="执行换号命令" tabindex="0" role="button" aria-label="聚焦执行换号命令，extension_bridge, 请求与执行" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="extension_bridge" data-node-tag="写 Cookie / 刷新 / 读有效期" data-node-context="请求与执行">
+          <title>执行换号命令 · extension_bridge · 请求与执行 · 写 Cookie / 刷新 / 读有效期</title>
+          <rect x="986" y="86" width="150" height="68" rx="6" class="c-mask"/>
+          <rect x="986" y="86" width="150" height="68" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(992 92) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1095" y="310" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Overleaf</text>
-        <text data-detail="context" x="1095" y="326" class="t-muted" font-size="9" text-anchor="middle">账号 / 项目 / 云端编译</text>
+          <text data-node-label="" data-detail-anchor="" x="1061" y="107" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">执行换号命令</text>
+          <text data-detail="context" x="1061" y="124" class="t-muted" font-size="8" text-anchor="middle">extension_bridge</text>
+        <text data-detail="fine" x="1061" y="142" class="t-frontend" font-size="7" text-anchor="middle">写 Cookie / 刷新 / 读有效期</text>
         </g>
 
-        <g id="node-storage" data-node-id="storage" data-node-label="本地数据与密钥库" tabindex="0" role="button" aria-label="聚焦本地数据与密钥库，账号 / 卡片 / 地址, 架构组件" aria-pressed="false" data-node-kind="database" data-node-sublabel="账号 / 卡片 / 地址" data-node-context="架构组件">
-          <title>本地数据与密钥库 · 账号 / 卡片 / 地址 · 架构组件</title>
-          <rect x="350" y="500" width="190" height="74" rx="6" class="c-mask"/>
-          <rect x="350" y="500" width="190" height="74" rx="6" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(356 506) scale(0.6875)">
+        <g id="node-failure" data-node-id="failure" data-node-label="记录失败" tabindex="0" role="button" aria-label="聚焦记录失败，错误分类与恢复提示, 恢复与异常" aria-pressed="false" data-node-kind="security" data-node-sublabel="错误分类与恢复提示" data-node-context="恢复与异常">
+          <title>记录失败 · 错误分类与恢复提示 · 恢复与异常</title>
+          <rect x="226" y="220" width="150" height="52" rx="6" class="c-mask"/>
+          <rect x="226" y="220" width="150" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(232 226) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="301" y="241" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">记录失败</text>
+          <text data-detail="context" x="301" y="258" class="t-muted" font-size="8" text-anchor="middle">错误分类与恢复提示</text>
+        </g>
+
+        <g id="node-recover" data-node-id="recover" data-node-label="密码恢复 Cookie" tabindex="0" role="button" aria-label="聚焦密码恢复 Cookie，credential_jobs / CDP, 恢复与异常" aria-pressed="false" data-node-kind="backend" data-node-sublabel="credential_jobs / CDP" data-node-tag="需验证时等待用户输入" data-node-context="恢复与异常">
+          <title>密码恢复 Cookie · credential_jobs / CDP · 恢复与异常 · 需验证时等待用户输入</title>
+          <rect x="620" y="212" width="150" height="68" rx="6" class="c-mask"/>
+          <rect x="620" y="212" width="150" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(626 218) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="695" y="233" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">密码恢复 Cookie</text>
+          <text data-detail="context" x="695" y="250" class="t-muted" font-size="8" text-anchor="middle">credential_jobs / CDP</text>
+        <text data-detail="fine" x="695" y="268" class="t-backend" font-size="7" text-anchor="middle">需验证时等待用户输入</text>
+        </g>
+
+        <g id="node-result" data-node-id="result" data-node-label="任务收尾与界面反馈" tabindex="0" role="button" aria-label="聚焦任务收尾与界面反馈，TaskSnapshot → SSE, 写回与反馈" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="TaskSnapshot → SSE" data-node-tag="释放账号锁 / 结果 / 日志" data-node-context="写回与反馈">
+          <title>任务收尾与界面反馈 · TaskSnapshot → SSE · 写回与反馈 · 释放账号锁 / 结果 / 日志</title>
+          <rect x="48" y="338" width="150" height="68" rx="6" class="c-mask"/>
+          <rect x="48" y="338" width="150" height="68" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(54 344) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="123" y="359" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">任务收尾与界面反馈</text>
+          <text data-detail="context" x="123" y="376" class="t-muted" font-size="8" text-anchor="middle">TaskSnapshot → SSE</text>
+        <text data-detail="fine" x="123" y="394" class="t-frontend" font-size="7" text-anchor="middle">释放账号锁 / 结果 / 日志</text>
+        </g>
+
+        <g id="node-skills" data-node-id="skills" data-node-label="按需同步 skills" tabindex="0" role="button" aria-label="聚焦按需同步 skills，api/skills → state.json, 写回与反馈" aria-pressed="false" data-node-kind="backend" data-node-sublabel="api/skills → state.json" data-node-context="写回与反馈">
+          <title>按需同步 skills · api/skills → state.json · 写回与反馈</title>
+          <rect x="404" y="346" width="150" height="52" rx="6" class="c-mask"/>
+          <rect x="404" y="346" width="150" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(410 352) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="479" y="367" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">按需同步 skills</text>
+          <text data-detail="context" x="479" y="384" class="t-muted" font-size="8" text-anchor="middle">api/skills → state.json</text>
+        </g>
+
+        <g id="node-subscription" data-node-id="subscription" data-node-label="刷新订阅元数据" tabindex="0" role="button" aria-label="聚焦刷新订阅元数据，accounts/session, 写回与反馈" aria-pressed="false" data-node-kind="backend" data-node-sublabel="accounts/session" data-node-tag="计划 / 到期时间 / 试用" data-node-context="写回与反馈">
+          <title>刷新订阅元数据 · accounts/session · 写回与反馈 · 计划 / 到期时间 / 试用</title>
+          <rect x="620" y="338" width="150" height="68" rx="6" class="c-mask"/>
+          <rect x="620" y="338" width="150" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(626 344) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="695" y="359" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">刷新订阅元数据</text>
+          <text data-detail="context" x="695" y="376" class="t-muted" font-size="8" text-anchor="middle">accounts/session</text>
+        <text data-detail="fine" x="695" y="394" class="t-backend" font-size="7" text-anchor="middle">计划 / 到期时间 / 试用</text>
+        </g>
+
+        <g id="node-persist" data-node-id="persist" data-node-label="写回当前账号" tabindex="0" role="button" aria-label="聚焦写回当前账号，AccountStore, 写回与反馈" aria-pressed="false" data-node-kind="database" data-node-sublabel="AccountStore" data-node-tag="提交锁内重读再保存" data-node-context="写回与反馈">
+          <title>写回当前账号 · AccountStore · 写回与反馈 · 提交锁内重读再保存</title>
+          <rect x="986" y="338" width="150" height="68" rx="6" class="c-mask"/>
+          <rect x="986" y="338" width="150" height="68" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(992 344) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="445" y="535" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">本地数据与密钥库</text>
-        <text data-detail="context" x="445" y="551" class="t-muted" font-size="9" text-anchor="middle">账号 / 卡片 / 地址</text>
+          <text data-node-label="" data-detail-anchor="" x="1061" y="359" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">写回当前账号</text>
+          <text data-detail="context" x="1061" y="376" class="t-muted" font-size="8" text-anchor="middle">AccountStore</text>
+        <text data-detail="fine" x="1061" y="394" class="t-database" font-size="7" text-anchor="middle">提交锁内重读再保存</text>
         </g>
 
-        <g id="node-automation" data-node-id="automation" data-node-label="独立浏览器会话" tabindex="0" role="button" aria-label="聚焦独立浏览器会话，登录 / 注册 / reCAPTCHA, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel="登录 / 注册 / reCAPTCHA" data-node-context="架构组件">
-          <title>独立浏览器会话 · 登录 / 注册 / reCAPTCHA · 架构组件</title>
-          <rect x="665" y="500" width="210" height="74" rx="6" class="c-mask"/>
-          <rect x="665" y="500" width="210" height="74" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(671 506) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="770" y="535" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">独立浏览器会话</text>
-        <text data-detail="context" x="770" y="551" class="t-muted" font-size="9" text-anchor="middle">登录 / 注册 / reCAPTCHA</text>
+        <!-- Edge labels -->
+        <g data-detail="context" data-edge-from="bridge" data-edge-to="persist" data-edge-label="三条回执成功" data-edge-key="0" data-edge-id="acknowledged">
+          <rect x="1134" y="100" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="1167.8" y="110" class="t-backend" font-size="8" text-anchor="middle">三条回执成功</text>
         </g>
 
-        <g id="node-extension" data-node-id="extension" data-node-label="宿主机 Chrome 扩展" tabindex="0" role="button" aria-label="聚焦宿主机 Chrome 扩展，当前档案内无感换号, 架构组件" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="当前档案内无感换号" data-node-context="架构组件">
-          <title>宿主机 Chrome 扩展 · 当前档案内无感换号 · 架构组件</title>
-          <rect x="990" y="500" width="210" height="74" rx="6" class="c-mask"/>
-          <rect x="990" y="500" width="210" height="74" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(996 506) scale(0.6875)">
-            <rect x="2" y="3" width="12" height="10" rx="2"/>
-            <path d="M2 6.5h12"/>
-            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
-            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="1095" y="535" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">宿主机 Chrome 扩展</text>
-        <text data-detail="context" x="1095" y="551" class="t-muted" font-size="9" text-anchor="middle">当前档案内无感换号</text>
+
+
+
+
+        <g data-detail="context" data-edge-from="identity" data-edge-to="recover" data-edge-label="Cookie 缺失 / 失效" data-edge-key="6" data-edge-id="recover-session">
+          <rect x="688.8" y="148" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="737" y="158" class="t-security" font-size="8" text-anchor="middle">Cookie 缺失 / 失效</text>
         </g>
 
-        <!-- Connection labels -->
-        <g data-detail="context" data-edge-from="agents" data-edge-to="skills" data-edge-label="Python CLI" data-edge-key="0" data-edge-id="agent-cli">
-          <rect x="261" y="67" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="290" y="77" class="t-muted" font-size="8" text-anchor="middle">Python CLI</text>
-        </g>
-        <g data-detail="context" data-edge-from="skills" data-edge-to="overleaf" data-edge-label="Cookie / Git" data-edge-key="1" data-edge-id="skills-cloud">
-          <rect x="1061.2" y="161" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="1095" y="171" class="t-muted" font-size="8" text-anchor="middle">Cookie / Git</text>
-        </g>
-        <g data-detail="context" data-edge-from="workbench" data-edge-to="service" data-edge-label="HTTP / SSE" data-edge-key="2" data-edge-id="ui-api">
-          <rect x="261" y="292" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="290" y="302" class="t-backend" font-size="8" text-anchor="middle">HTTP / SSE</text>
-        </g>
-        <g data-detail="context" data-edge-from="service" data-edge-to="operations" data-edge-label="任务执行" data-edge-key="3" data-edge-id="task-dispatch">
-          <rect x="578.3" y="292" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="602.5" y="302" class="t-backend" font-size="8" text-anchor="middle">任务执行</text>
-        </g>
-        <g data-detail="context" data-edge-from="operations" data-edge-to="overleaf" data-edge-label="HTTPS" data-edge-key="4" data-edge-id="remote-api">
-          <rect x="905.5" y="292" width="34" height="14" rx="3" class="c-mask"/>
-          <text x="922.5" y="302" class="t-backend" font-size="8" text-anchor="middle">HTTPS</text>
-        </g>
-        <g data-detail="context" data-edge-from="service" data-edge-to="skills" data-edge-label="凭据同步" data-edge-key="5" data-edge-id="credentials-sync">
-          <rect x="420.8" y="255" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="445" y="265" class="t-muted" font-size="8" text-anchor="middle">凭据同步</text>
-        </g>
-        <g data-detail="context" data-edge-from="service" data-edge-to="storage" data-edge-label="读写 / 加密引用" data-edge-key="6" data-edge-id="persist-data">
-          <rect x="404" y="409" width="82" height="14" rx="3" class="c-mask"/>
-          <text x="445" y="419" class="t-muted" font-size="8" text-anchor="middle">读写 / 加密引用</text>
-        </g>
-        <g data-detail="context" data-edge-from="operations" data-edge-to="automation" data-edge-label="CDP" data-edge-key="7" data-edge-id="browser-cdp">
-          <rect x="746.5" y="404.5" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="761.5" y="414.5" class="t-muted" font-size="8" text-anchor="middle">CDP</text>
-        </g>
-        <g data-detail="context" data-edge-from="operations" data-edge-to="extension" data-edge-label="WebSocket" data-edge-key="8" data-edge-id="extension-bridge">
-          <rect x="839.9" y="353" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-          <text x="866.5" y="363" class="t-muted" font-size="8" text-anchor="middle">WebSocket</text>
-        </g>
-        <g data-detail="context" data-edge-from="extension" data-edge-to="overleaf" data-edge-label="浏览器会话" data-edge-key="9" data-edge-id="browser-session">
-          <rect x="1066" y="480" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="1095" y="490" class="t-muted" font-size="8" text-anchor="middle">浏览器会话</text>
+        <g data-detail="context" data-edge-from="recover" data-edge-to="identity" data-edge-label="恢复后续跑一次" data-edge-key="8" data-edge-id="resume">
+          <rect x="610.9" y="280" width="77.2" height="14" rx="3" class="c-mask"/>
+          <text x="649.5" y="290" class="t-database" font-size="8" text-anchor="middle">恢复后续跑一次</text>
         </g>
 
-        <!-- Boundary labels (foreground masks keep routes out of titles) -->
-
+        <g data-detail="context" data-edge-from="subscription" data-edge-to="skills" data-edge-label="更新或警告" data-edge-key="10" data-edge-id="sync-credentials">
+          <rect x="558" y="352" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="587" y="362" class="t-backend" font-size="8" text-anchor="middle">更新或警告</text>
+        </g>
+        <g data-detail="context" data-edge-from="recover" data-edge-to="failure" data-edge-label="无密码 / 恢复失败" data-edge-key="11" data-edge-id="unrecoverable">
+          <rect x="452.2" y="226" width="91.6" height="14" rx="3" class="c-mask"/>
+          <text x="498" y="236" class="t-security" font-size="8" text-anchor="middle">无密码 / 恢复失败</text>
+        </g>
+        <g data-detail="context" data-edge-from="identity" data-edge-to="migration" data-edge-label="有效" data-edge-key="12" data-edge-id="verified">
+          <rect x="774" y="100" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="789" y="110" class="t-backend" font-size="8" text-anchor="middle">有效</text>
+        </g>
 
         <!-- Legend -->
-
+        <g data-legend="" data-legend-bridge="">
+          <text x="20" y="434" class="t-primary" font-size="12" font-weight="650">图例</text>
+          <g data-legend-semantic-kind="frontend" data-legend-kind="frontend" data-legend-label="界面与浏览器" data-legend-x="20" data-legend-baseline="454" data-legend-width="96">
+            <rect x="20" y="446" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
+            <text x="42" y="454" class="t-muted" font-size="7.5" font-weight="500">界面与浏览器</text>
+          </g>
+          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="业务执行" data-legend-x="123" data-legend-baseline="454" data-legend-width="78">
+            <rect x="123" y="446" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+            <text x="145" y="454" class="t-muted" font-size="7.5" font-weight="500">业务执行</text>
+          </g>
+          <g data-legend-semantic-kind="security" data-legend-kind="security" data-legend-label="任务控制" data-legend-x="208" data-legend-baseline="454" data-legend-width="78">
+            <rect x="208" y="446" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+            <text x="230" y="454" class="t-muted" font-size="7.5" font-weight="500">任务控制</text>
+          </g>
+          <g data-legend-semantic-kind="messagebus" data-legend-kind="messagebus" data-legend-label="后台调度" data-legend-x="293" data-legend-baseline="454" data-legend-width="78">
+            <rect x="293" y="446" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
+            <text x="315" y="454" class="t-muted" font-size="7.5" font-weight="500">后台调度</text>
+          </g>
+          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="本地持久化" data-legend-x="378" data-legend-baseline="454" data-legend-width="87">
+            <rect x="378" y="446" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+            <text x="400" y="454" class="t-muted" font-size="7.5" font-weight="500">本地持久化</text>
+          </g>
+        </g>
       </svg>
       <p class="intent-trace-status no-print" id="intent-trace-status" role="status" aria-live="polite" aria-atomic="true"></p>
       <div class="share-chapter-cue no-print" id="share-chapter-cue" hidden role="status" aria-live="polite">
@@ -5514,33 +5587,33 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       <div class="card">
         <div class="card-header">
           <div class="card-dot cyan"></div>
-          <h3>账号与资源</h3>
+          <h3>共用任务底座</h3>
         </div>
         <ul>
-          <li>&bull; 导入导出、批量维护、Cookie 恢复、Git token 与改密</li>
-          <li>&bull; 订阅进度、试用资格、卡片与地址管理</li>
+          <li>&bull; 账号锁防止冲突，浏览器批次限制并发</li>
+          <li>&bull; 等待输入、取消与重试由任务状态统一管理</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>换号与写作</h3>
+          <h3>业务模块复用</h3>
         </div>
         <ul>
-          <li>&bull; 核验身份、迁移项目、切换浏览器、同步 skills</li>
-          <li>&bull; agent 处理本地材料，Overleaf 编译并返回 PDF</li>
+          <li>&bull; credential_jobs 处理登录、改密与 Git token</li>
+          <li>&bull; registration 驱动订阅状态机，resources 管理卡片与地址</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot amber"></div>
-          <h3>共用运行逻辑</h3>
+          <h3>写回边界</h3>
         </div>
         <ul>
-          <li>&bull; 桌面与 Docker 共用服务和 Web UI</li>
-          <li>&bull; 任务锁、并发队列、人工验证与运行日志</li>
+          <li>&bull; 网络 I/O 不持账号提交锁，保存前重读最新数据</li>
+          <li>&bull; 订阅或 skills 同步失败会警告，不伪报换号失败</li>
         </ul>
       </div>
     </div>

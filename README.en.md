@@ -1,13 +1,11 @@
-<a id="top"></a>
-
 <p align="center">
   <img src="apps/desktop/src-tauri/icons/128x128@2x.png" alt="MOGA" width="112" height="112">
 </p>
 
 <h1 align="center">Make Overleaf Great Again</h1>
 
-<p align="center"><strong>MOGA · A modern Overleaf workflow</strong></p>
-<p align="center">Connect your coding agent, move projects with your accounts, and keep large papers moving past compile timeouts.</p>
+<p align="center"><strong>Overleaf Account Switcher · A modern Overleaf workflow</strong></p>
+<p align="center">Connect your agent, switch accounts seamlessly, and migrate projects so large papers aren't held back by compile timeouts.</p>
 <p align="center"><a href="README.md">简体中文</a> · <strong>English</strong></p>
 
 <p align="center">
@@ -25,11 +23,11 @@
 
 <a id="about"></a>
 
-## Writing LaTeX has changed
+## As LaTeX gets easier
 
-As the models behind ChatGPT, Claude, and similar products improve, getting started with LaTeX becomes less daunting. Coding agents built on these models can help set up a TeX environment, edit a paper, debug compilation errors, and produce a PDF. Often, you can simply describe the task. With permission, an agent can also work directly with local references, experiment data, and figures, without making you upload everything first.
+As LLMs improve, LaTeX typesetting and compilation become easier to get into. Agents can help set up a TeX environment, edit a paper, debug compilation errors, and produce a PDF. Often, you can simply describe the task. With permission, an agent can also work directly with local references, experiment data, and figures, without making you upload everything first.
 
-Long before that, Overleaf had already saved many of us a lot of setup work:
+Before that, Overleaf was the natural choice for many of us:
 
 - **Start writing without configuring a toolchain.** No need to begin by installing TeX Live or MiKTeX, then sorting out engines, packages, fonts, and template compatibility.
 - **Let the cloud do the compiling.** Compilation can be demanding. Moving it off your machine is useful, especially on less powerful hardware.
@@ -39,7 +37,7 @@ Those benefits still matter. But writing now extends beyond the browser: an agen
 
 Although Overleaf has AI features of its own, repeatedly uploading material, moving context, and synchronizing edits is still a chore when your references, data, and tools live locally. Large projects can also hit the Free plan's compile timeout. Moving to another account with suitable entitlements means dealing with project migration, collaboration access, and agent credentials all over again.
 
-**Overleaf Account Switcher is a local-first workspace for Overleaf accounts and projects.** Its companion [overleaf-skills](https://github.com/YuanzAAi/overleaf-skills) lets Codex and Claude Code use local material, edit Overleaf projects, compile in the cloud, and retrieve the PDF. When you need another account, project migration, the browser session, and skills credentials move together. Keep cloud collaboration and let your agent take part, without moving everything by hand.
+An agent can handle much of a LaTeX writing workflow, but going all-in on agents is still some way from how we actually work, especially on research papers: eventually, a person needs to take over and revise. Overleaf still makes it easy to **tweak the text by hand, compile, and see the resulting PDF right away**. What we need is a bridge between agent-written drafts and hands-on editing. Connecting Overleaf to modern tools and addressing its friction points can make it that bridge. Make Overleaf great again. **Overleaf Account Switcher is a local-first workspace for Overleaf accounts and projects.** Its companion [overleaf-skills](https://github.com/YuanzAAi/overleaf-skills) lets Codex and Claude Code use local material, edit Overleaf projects, compile in the cloud, and retrieve the PDF. When you need another account, project migration, the browser session, and skills credentials move together. Keep cloud collaboration and let your agent take part, without moving everything by hand.
 
 <a id="features"></a>
 
@@ -59,10 +57,10 @@ Although Overleaf has AI features of its own, repeatedly uploading material, mov
 ### Why Overleaf Account Switcher
 
 - **Bring your agent into the paper workflow.** Connect local material, Overleaf projects, and compiled PDFs with less uploading and copy-pasting.
-- **Move projects as you switch accounts.** When you need an account with suitable compile entitlements, handle project ownership and access as part of the switch.
+- **Move projects as you switch accounts.** When moving to an account with premium entitlements, handle project ownership and access as part of the switch.
 - **Keep your browser and skills on the same account.** Optionally synchronize Cookies and Git tokens during a browser switch instead of configuring each tool separately.
 - **Recover from an expired Cookie.** Accounts with saved passwords can attempt a fresh login and resume the task. reCAPTCHA and email verification wait for your input.
-- **Use the same workspace on desktop and the web.** Windows, macOS, and Docker share the same service and interface.
+- **Keep compile timeouts out of the way.** With multiple accounts that have premium entitlements, browser switching and project migration let you move work to another premium account instead of staying constrained by the Free plan's compile limit.
 
 Compile limits generally follow the **project owner's** plan; switching a collaborator's account alone does not increase them. Overleaf Account Switcher does not alter entitlements. Trial eligibility and duration come from Overleaf. See [Overleaf's premium feature documentation](https://docs.overleaf.com/getting-started/free-and-premium-plans/premium-features).
 
@@ -74,15 +72,29 @@ Compile limits generally follow the **project owner's** plan; switching a collab
 
 ## How it works
 
+### How the parts connect
+
 <p align="center">
-  <a href="docs/architecture.html"><img src="docs/images/architecture.png" alt="Overleaf Account Switcher architecture and connected workflows" width="1200"></a>
+  <img src="docs/images/architecture.png" alt="Overleaf Account Switcher architecture and connected workflows" width="1200">
 </p>
 
 The workspace sends operations to the Rust service, whose task layer manages concurrency, account locks, and progress. Account and project operations share the Overleaf HTTP client, browser automation, and extension bridge: HTTP retrieves identity, subscription, and project state; separate browser sessions handle login and subscription actions; the Chrome extension switches accounts in your everyday browser.
 
-Account data stays local, with passwords, Cookies, Git tokens, and sensitive card fields stored in the keyring. A successful switch can synchronize skills credentials. The agent then uses Cookies for project reads and compilation, and Git for edits and history. Desktop runs the service locally; Docker runs it in a container. Coding agents stay on the host.
+Account data stays local, with passwords, Cookies, Git tokens, and sensitive card fields stored in the keyring. A successful switch can synchronize skills credentials. The agent then uses Cookies for project reads and compilation, and Git for edits and history. Desktop runs the service locally; Docker runs it in a container. Agents stay on the host.
 
-[Interactive system map](docs/architecture.html) · [Diagram source](docs/architecture.json)
+### How the backend executes a task
+
+Browser account switching illustrates the actual execution path below. Green arrows show execution and state updates; the recovery branch handles a missing or expired Cookie.
+
+<p align="center">
+  <img src="docs/images/backend-workflow.png" alt="Backend execution: task admission, identity checks, Cookie recovery, project migration, extension acknowledgments, state updates, and skills synchronization" width="1200">
+</p>
+
+- **Requests and execution are separate.** `runtime/server` receives requests and `api` dispatches operations. `runtime/tasks` tracks account locks, progress, and retry information. Long-running work executes in the background while SSE sends task snapshots to the interface.
+- **Session recovery uses a shared path.** `accounts/session` verifies identity; `api/credential_jobs` schedules a separate browser to recover the Cookie. reCAPTCHA or email verification waits for user input, then the original task resumes. The same browser batch machinery also handles password changes and Git token operations.
+- **Confirm remote results before committing locally.** `projects/migration` optionally copies or rejoins projects and checks access. The current account is saved only after the extension sets the Cookie, refreshes tabs, and reads the expiry successfully. Subscription refresh and optional skills synchronization follow. Failures in those follow-up steps are reported separately, not as a failed account switch.
+
+`workflows/registration` defines registration and subscription steps; `api/registration` drives the browser and checks page state. `resources` manages cards and addresses, while `accounts/io` handles account imports and exports. These modules share persistence and keyring access through `storage`. Account network operations finish before taking the commit lock, rereading the latest data, and saving, so concurrent tasks do not overwrite one another. Cancelled browser tasks finish session cleanup before releasing their account locks.
 
 <a id="download"></a>
 
@@ -150,7 +162,7 @@ After installation and account synchronization, ask your agent:
 
 > Use overleaf-skills to list my Overleaf projects. Read the paper's main.tex, then update the results section using my local experiment outputs. Show me the changes for approval, push them to Overleaf, compile, and download the PDF.
 
-Cookies support reads, compilation, and downloads. Edits and history use Git and need the relevant [Overleaf Git integration entitlement](https://docs.overleaf.com/integrations-and-add-ons/git-integration-and-github-synchronization/git-integration). Account synchronization requires both a Cookie and a Git token; if either is missing, the application reports it and preserves the previous skills state.
+Cookies support reads, compilation, and downloads. Edits and history use Git with the relevant [Overleaf Git integration entitlement](https://docs.overleaf.com/integrations-and-add-ons/git-integration-and-github-synchronization/git-integration) and a Git token. Account synchronization requires both a Cookie and a Git token; if either is missing, the application reports it and preserves the previous skills state.
 
 Synchronization applies to subsequent commands. Copies have new project IDs, so ask the agent to list projects again and confirm its target.
 
@@ -250,7 +262,7 @@ The Rust workspace implements the service and business logic. Tauri 2 supplies t
 | `crates/service` | Local API, account operations, task orchestration, concurrency, and skills integration. |
 | `chrome_extension` | Browser-session operations and WebSocket bridging. |
 | `docker` / `scripts` | Container environment and cross-platform packaging. |
-| `docs` | Product screenshots and reusable diagram sources. |
+| `docs` | Product screenshots and system diagrams. |
 
 Use current stable Rust (minimum 1.88), Node.js 22, and npm. Windows needs MSVC and Visual Studio C++ Build Tools; macOS needs Xcode Command Line Tools.
 
@@ -283,8 +295,6 @@ Artifacts are written to `target/desktop-package/`. The [build workflow](.github
 
 [MIT](LICENSE)
 
-<p align="center">
-  Community: <a href="https://linux.do"><img src="https://cdn3.ldstatic.com/original/4X/d/1/4/d146c68151340881c884d95e0da4acdf369258c6.png" alt="" height="24"></a> <a href="https://linux.do"><strong>LINUX DO</strong></a>
-</p>
+## Community
 
-<p align="right"><a href="#top">Back to top</a></p>
+<a href="https://linux.do"><img src="https://cdn3.ldstatic.com/original/4X/d/1/4/d146c68151340881c884d95e0da4acdf369258c6.png" alt="LINUX DO" height="32"></a>

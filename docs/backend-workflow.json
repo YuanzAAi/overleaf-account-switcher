@@ -1,0 +1,58 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "后端任务执行 · 无感换号链路",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "legend": {
+      "entries": {
+        "frontend": { "label": "界面与浏览器" },
+        "backend": { "label": "业务执行" },
+        "security": { "label": "任务控制" },
+        "messagebus": { "label": "后台调度" },
+        "database": { "label": "本地持久化" }
+      }
+    }
+  },
+  "lanes": [
+    { "id": "execution", "label": "请求与执行" },
+    { "id": "recovery", "label": "恢复与异常", "variant": "exception" },
+    { "id": "commit", "label": "写回与反馈" }
+  ],
+  "mainPath": ["request", "admission", "background", "identity", "migration", "bridge", "persist"],
+  "nodes": [
+    { "id": "request", "lane": "execution", "col": 0, "type": "frontend", "label": "HTTP 请求", "sublabel": "runtime/server → api", "width": 150 },
+    { "id": "admission", "lane": "execution", "col": 1, "type": "security", "label": "任务准入与账号锁", "sublabel": "runtime/tasks", "width": 150 },
+    { "id": "background", "lane": "execution", "col": 2, "type": "messagebus", "label": "后台执行", "sublabel": "ApiBackgroundJob", "width": 150 },
+    { "id": "identity", "lane": "execution", "col": 3, "type": "backend", "label": "核验目标身份", "sublabel": "accounts/session", "width": 150 },
+    { "id": "migration", "lane": "execution", "col": 4, "type": "backend", "label": "按需迁移项目", "sublabel": "projects/migration", "tag": "复制 / 重新加入 / 核验访问", "width": 150 },
+    { "id": "bridge", "lane": "execution", "col": 5, "type": "frontend", "label": "执行换号命令", "sublabel": "extension_bridge", "tag": "写 Cookie / 刷新 / 读有效期", "width": 150 },
+    { "id": "recover", "lane": "recovery", "col": 3, "type": "backend", "label": "密码恢复 Cookie", "sublabel": "credential_jobs / CDP", "tag": "需验证时等待用户输入", "width": 150 },
+    { "id": "failure", "lane": "recovery", "col": 1, "type": "security", "label": "记录失败", "sublabel": "错误分类与恢复提示", "width": 150 },
+    { "id": "persist", "lane": "commit", "col": 5, "type": "database", "label": "写回当前账号", "sublabel": "AccountStore", "tag": "提交锁内重读再保存", "width": 150 },
+    { "id": "subscription", "lane": "commit", "col": 3, "type": "backend", "label": "刷新订阅元数据", "sublabel": "accounts/session", "tag": "计划 / 到期时间 / 试用", "width": 150 },
+    { "id": "skills", "lane": "commit", "col": 2, "type": "backend", "label": "按需同步 skills", "sublabel": "api/skills → state.json", "width": 150 },
+    { "id": "result", "lane": "commit", "col": 0, "type": "frontend", "label": "任务收尾与界面反馈", "sublabel": "TaskSnapshot → SSE", "tag": "释放账号锁 / 结果 / 日志", "width": 150 }
+  ],
+  "edges": [
+    { "id": "receive", "from": "request", "to": "admission", "variant": "emphasis" },
+    { "id": "schedule", "from": "admission", "to": "background", "variant": "emphasis" },
+    { "id": "execute", "from": "background", "to": "identity", "variant": "emphasis" },
+    { "id": "verified", "from": "identity", "to": "migration", "label": "有效", "variant": "emphasis" },
+    { "id": "migrated", "from": "migration", "to": "bridge", "variant": "emphasis" },
+    { "id": "recover-session", "from": "identity", "to": "recover", "label": "Cookie 缺失 / 失效", "variant": "security", "role": "branch" },
+    { "id": "resume", "from": "recover", "to": "identity", "label": "恢复后续跑一次", "variant": "dashed", "role": "return" },
+    { "id": "unrecoverable", "from": "recover", "to": "failure", "label": "无密码 / 恢复失败", "variant": "security", "role": "error" },
+    { "id": "report-failure", "from": "failure", "to": "result", "variant": "security", "role": "error" },
+    { "id": "acknowledged", "from": "bridge", "to": "persist", "label": "三条回执成功", "variant": "emphasis" },
+    { "id": "read-subscription", "from": "persist", "to": "subscription", "variant": "emphasis", "role": "return" },
+    { "id": "sync-credentials", "from": "subscription", "to": "skills", "label": "更新或警告", "variant": "emphasis", "role": "return" },
+    { "id": "complete", "from": "skills", "to": "result", "variant": "emphasis", "role": "return" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "共用任务底座", "items": ["账号锁防止冲突，浏览器批次限制并发", "等待输入、取消与重试由任务状态统一管理"] },
+    { "dot": "emerald", "title": "业务模块复用", "items": ["credential_jobs 处理登录、改密与 Git token", "registration 驱动订阅状态机，resources 管理卡片与地址"] },
+    { "dot": "amber", "title": "写回边界", "items": ["网络 I/O 不持账号提交锁，保存前重读最新数据", "订阅或 skills 同步失败会警告，不伪报换号失败"] }
+  ]
+}

@@ -8,7 +8,7 @@
     "viewBox": [1240, 620]
   },
   "components": [
-    { "id": "agents", "type": "external", "label": "Coding agents", "sublabel": "Codex / Claude Code", "pos": [40, 50], "size": [190, 74] },
+    { "id": "agents", "type": "external", "label": "Agents", "sublabel": "Codex / Claude Code", "pos": [40, 50], "size": [190, 74] },
     { "id": "skills", "type": "backend", "label": "overleaf-skills", "sublabel": "项目编辑 / 编译 / PDF", "pos": [350, 50], "size": [190, 74] },
     { "id": "workbench", "type": "frontend", "label": "账号工作台", "sublabel": "Desktop / Web UI", "pos": [40, 275], "size": [190, 74] },
     { "id": "service", "type": "backend", "label": "Rust 服务", "sublabel": "任务编排 / 并发 / 日志", "pos": [350, 275], "size": [190, 74] },
