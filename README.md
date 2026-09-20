@@ -248,19 +248,25 @@ docker compose -f docker/compose.yml up -d --build
 
 ## 项目结构
 
-| 目录 | 职责 |
-| --- | --- |
-| `apps/web` | 账号、注册、资源与设置页面，共用的交互状态、任务日志和主题。 |
-| `apps/desktop` | Tauri 桌面窗口、托盘、文件对话框、剪贴板与服务进程管理。 |
-| `crates/core` | 账号、项目、卡片等领域模型与基础规则。 |
-| `crates/storage` | 数据目录、账号与资源持久化、系统密钥库。 |
-| `crates/browser` | Chrome 档案、CDP 自动化、浏览器生命周期与扩展桥。 |
-| `crates/overleaf-api` | Overleaf 身份、订阅、项目接口与响应解析。 |
-| `crates/workflows` | 注册、订阅和项目迁移的流程定义。 |
-| `crates/service` | 本地 API、账号操作、任务编排、并发执行与 skills 联动。 |
-| `chrome_extension` | 浏览器会话操作与 WebSocket 桥接。 |
-| `docker` / `scripts` | 容器环境与跨平台打包脚本。 |
-| `docs` | 产品截图与工作原理图。 |
+```text
+overleaf-account-switcher/
+├── apps/
+│   ├── web/               # 账号、注册、资源与设置页面，共用状态、任务日志和主题
+│   └── desktop/           # Tauri 窗口、托盘、文件对话框、剪贴板与服务进程管理
+├── crates/
+│   ├── core/              # 账号、项目、卡片等领域模型与基础规则
+│   ├── storage/           # 数据目录、账号与资源持久化、系统密钥库
+│   ├── browser/           # Chrome 档案、CDP 自动化、浏览器生命周期与扩展桥
+│   ├── overleaf-api/      # Overleaf 身份、订阅、项目接口与响应解析
+│   ├── workflows/         # 注册、订阅和项目迁移的流程定义
+│   └── service/           # 本地 API、账号操作、任务编排、并发执行与 skills 联动
+├── chrome_extension/      # 浏览器会话操作与 WebSocket 桥接
+├── docker/                # 容器环境、Compose 配置与浏览器运行环境
+├── scripts/               # Windows 与 macOS 打包脚本
+├── docs/                  # 产品截图与工作原理图
+├── .github/workflows/     # 自动构建、Release 发布与 Docker 镜像推送
+└── Cargo.toml             # Rust 工作区与共用依赖配置
+```
 
 <a id="development"></a>
 

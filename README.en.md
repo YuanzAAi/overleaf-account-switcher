@@ -248,19 +248,25 @@ This project is not affiliated with Overleaf. Use accounts and projects you own 
 
 ## Project structure
 
-| Directory | Responsibility |
-| --- | --- |
-| `apps/web` | Account, registration, resource, and settings pages; shared state, task logs, and themes. |
-| `apps/desktop` | Tauri windows, tray, file dialogs, clipboard, and service process management. |
-| `crates/core` | Account, project, and card models with foundational rules. |
-| `crates/storage` | Data locations, account and resource persistence, and the system keyring. |
-| `crates/browser` | Chrome profiles, CDP automation, browser lifecycle, and the extension bridge. |
-| `crates/overleaf-api` | Overleaf identity, subscription, and project interfaces and response parsing. |
-| `crates/workflows` | Registration, subscription, and project migration workflow definitions. |
-| `crates/service` | Local API, account operations, task orchestration, concurrency, and skills integration. |
-| `chrome_extension` | Browser-session operations and WebSocket bridging. |
-| `docker` / `scripts` | Container environment and cross-platform packaging. |
-| `docs` | Product screenshots and system diagrams. |
+```text
+overleaf-account-switcher/
+├── apps/
+│   ├── web/               # Account, registration, resource and settings pages; state, logs and themes
+│   └── desktop/           # Tauri windows, tray, dialogs, clipboard and service process management
+├── crates/
+│   ├── core/              # Account, project and card models with foundational rules
+│   ├── storage/           # Data locations, account and resource persistence, system keyring
+│   ├── browser/           # Chrome profiles, CDP automation, browser lifecycle and extension bridge
+│   ├── overleaf-api/      # Overleaf identity, subscription and project APIs; response parsing
+│   ├── workflows/         # Registration, subscription and project migration workflow definitions
+│   └── service/           # Local API, account operations, task orchestration, concurrency and skills
+├── chrome_extension/      # Browser-session operations and WebSocket bridging
+├── docker/                # Container environment, Compose configuration and browser runtime
+├── scripts/               # Windows and macOS packaging scripts
+├── docs/                  # Product screenshots and system diagrams
+├── .github/workflows/     # Automated builds, GitHub Releases and Docker image publishing
+└── Cargo.toml             # Rust workspace and shared dependency configuration
+```
 
 <a id="development"></a>
 
