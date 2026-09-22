@@ -50,7 +50,7 @@ import {
 import { extensionBridgeConnected } from "../settings.js";
 import { endpoints, state } from "../state.js";
 import { fetchJson } from "../http.js";
-import { postJson, postTaskResult, refresh, updateTasks } from "../sync.js";
+import { clearBrowserCredentialRecoveryState, credentialRecoveryTask, postJson, postTaskResult, refresh, updateTasks } from "../sync.js";
 import { escapeHtml, pill, writeClipboard } from "../format.js";
 import { iconSvg } from "../icons.js";
 
@@ -577,8 +577,12 @@ export function reportCredentialTaskTerminal({
   route,
   requestedCount,
 }) {
-  if (submit) submit.disabled = false;
-  const ownedStatus = accountAssistStatusForMode("credentials", modeId, status);
+  const ownsForm = submit?.dataset.taskId === task?.task_id;
+  if (ownsForm) {
+    submit.disabled = false;
+    delete submit.dataset.taskId;
+  }
+  const ownedStatus = ownsForm ? accountAssistStatusForMode("credentials", modeId, status) : null;
   const phase = String((task && task.phase) || "").toLowerCase();
   if (phase === "cancelled") {
     reportUiOperationSuccess({
@@ -651,6 +655,8 @@ async function submitCredentialAccounts(event, refreshing) {
   const submit = document.getElementById(`${modeId}-submit`);
   let requestStarted = false;
   let pendingTask = false;
+  let submittedTaskId = "";
+  const ownsSubmission = () => submit.dataset.taskId === submittedTaskId;
 
   if (!accountCredentialActions().includes(action)) {
     reportUiOperationFailure({
@@ -677,20 +683,29 @@ async function submitCredentialAccounts(event, refreshing) {
     const requestedCount = Math.max(aliasValues.length, emailValues.length);
     requestStarted = true;
 
-    const recoveryTaskId = state.browserCredentialRecoveryTaskId;
-    if (recoveryTaskId) {
-      const recoveryIndex = aliasValues.indexOf(state.browserCredentialRecoveryAlias || aliasValues[0] || "");
+    const recoveryTaskId = state.browserCredentialRecoveryAssistTaskId === state.browserCredentialRecoveryTaskId
+      && state.browserCredentialRecoveryMode === modeId ? state.browserCredentialRecoveryTaskId : "";
+    const recoveryItemId = state.browserCredentialRecoveryItemId;
+    const recoveryAlias = state.browserCredentialRecoveryAlias;
+    submittedTaskId = recoveryTaskId || makeTaskId(refreshing ? "refresh-credentials" : "add-credentials", aliases || emails);
+    submit.dataset.taskId = submittedTaskId;
+    const recovery = await credentialRecoveryTask(recoveryTaskId, "new_browser_credentials", recoveryItemId);
+    if (!ownsSubmission()) return;
+    if (recovery) {
+      const recoveryIndex = aliasValues.indexOf(recoveryAlias || aliasValues[0] || "");
       const email = recoveryIndex >= 0 ? emailValues[recoveryIndex] || "" : emailValues.length === 1 ? emailValues[0] : "";
       const payload = {
         task_id: recoveryTaskId,
         kind: "new_browser_credentials",
         value: JSON.stringify({ email, password: passwords }),
       };
-      if (state.browserCredentialRecoveryItemId) payload.item_id = state.browserCredentialRecoveryItemId;
+      if (recoveryItemId) payload.item_id = recoveryItemId;
       const snapshot = await postJson(endpoints.taskInput, payload);
-      state.browserCredentialRecoveryItemId = "";
-      state.browserCredentialRecoveryAlias = "";
-      setAccountAssistShortStatus(status, "已提交密码，正在继续原任务");
+      if (ownsSubmission()) {
+        state.browserCredentialRecoveryItemId = "";
+        state.browserCredentialRecoveryAlias = "";
+        setAccountAssistShortStatus(status, "已提交密码，正在继续原任务");
+      }
       recordClientRuntimeInfo({
         scope, route: endpoints.taskInput, message: "已提交补充账号密码，正在继续原任务。",
       });
@@ -698,16 +713,21 @@ async function submitCredentialAccounts(event, refreshing) {
       return;
     }
 
-    const taskId = makeTaskId(refreshing ? "refresh-credentials" : "add-credentials", aliases || emails);
+    if (recoveryTaskId) {
+      clearBrowserCredentialRecoveryState();
+      submittedTaskId = makeTaskId(refreshing ? "refresh-credentials" : "add-credentials", aliases || emails);
+      submit.dataset.taskId = submittedTaskId;
+    }
+    const taskId = submittedTaskId;
     const payload = { aliases, passwords, task_id: taskId };
     if (!refreshing) payload.emails = emails;
     const report = await postJson(route, payload);
     const terminalOptions = { submit, status, modeId, operationTitle, scope, route, requestedCount };
     if (isActiveTaskSnapshot(report)) {
       pendingTask = true;
-      if (refreshing) {
+      if (ownsSubmission() && refreshing) {
         setAccountAssistShortStatus(status, "任务已开始");
-      } else {
+      } else if (ownsSubmission()) {
         reportUiOperationSuccess({
           status, shortMessage: "任务已开始", title: `${operationTitle}已排队`, scope, route,
           message: "浏览器任务已进入后台队列，结果将持续写入运行日志。", tone: "info",
@@ -721,16 +741,18 @@ async function submitCredentialAccounts(event, refreshing) {
     }
     await refresh();
     reportCredentialTaskTerminal({
-      ...terminalOptions, task: { phase: "completed", result: report },
+      ...terminalOptions, task: { task_id: taskId, phase: "completed", result: report },
     });
   } catch (error) {
     reportUiOperationFailure({
-      status, shortMessage: refreshing ? "刷新失败，请检查日志" : "登录失败，请检查日志",
+      status: ownsSubmission() ? status : null,
       title: `${operationTitle}失败`, scope, route, error,
     });
   } finally {
-    if (requestStarted || !refreshing) passwordInput.value = "";
-    if (!pendingTask) submit.disabled = false;
+    if (!submittedTaskId || ownsSubmission()) {
+      if (requestStarted || !refreshing) passwordInput.value = "";
+      if (!pendingTask) submit.disabled = false;
+    }
   }
 }
 

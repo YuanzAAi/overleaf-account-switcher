@@ -31,17 +31,12 @@ export function showToast(options = {}) {
 
 export function reportUiOperationFailure({
   status,
-  shortMessage,
   title,
   scope,
   route,
   error,
-  clearAfter = 7200,
 }) {
-  const visibleMessage = setAccountAssistShortStatus(status, shortMessage);
-  if (status) {
-    scheduleStatusClear(status, visibleMessage, clearAfter);
-  }
+  setAccountAssistShortStatus(status, "");
   recordClientRuntimeError({ scope, route, error });
   showToast({
     tone: "error",

@@ -813,6 +813,13 @@ export function isTerminalTaskSnapshot(task) {
   return taskTerminalPhases().includes(phase);
 }
 
+export function taskAwaitsInput(task, kind, itemId = "") {
+  if (!isActiveTaskSnapshot(task) || task.cancel_requested) return false;
+  if (itemId) return task.waiting_items?.some((item) => item.item_id === itemId && item.kind === kind) || false;
+  return (task.phase === "waiting_for_user" && task.waiting_for_input === kind)
+    || task.waiting_items?.some((item) => item.kind === kind) || false;
+}
+
 export function registerPendingAccountOperation(taskId, onTerminal) {
   const normalizedTaskId = String(taskId || "").trim();
   if (!normalizedTaskId || typeof onTerminal !== "function") return;
@@ -840,12 +847,13 @@ export function registerPendingAccountIoOperation({
   missingShortMessage,
   resultFailureShortMessage,
   allowFailedResult = false,
+  ownsForm = () => true,
   onResult,
 }) {
   const restoreSubmit = () => {
-    if (submit) submit.disabled = false;
+    if (submit && ownsForm()) submit.disabled = false;
   };
-  const reportStatus = () => accountAssistStatusForMode("io", modeId, status);
+  const reportStatus = () => ownsForm() ? accountAssistStatusForMode("io", modeId, status) : null;
 
   registerPendingAccountOperation(taskId, (terminalTask) => {
     const phase = String((terminalTask && terminalTask.phase) || "").toLowerCase();
@@ -895,7 +903,7 @@ export function registerPendingAccountIoOperation({
       .finally(restoreSubmit);
   });
   updateTasks([task], { incremental: true });
-  setTransientUiStatus(status, "任务已开始", 0);
+  if (ownsForm()) setTransientUiStatus(status, "任务已开始", 0);
 }
 
 export function settlePendingAccountOperations(tasks, previousTasks = []) {

@@ -53,6 +53,7 @@ import {
   settlePendingAccountOperations,
   syncTaskInputWindowFocus,
   taskHasAction,
+  taskAwaitsInput,
 } from "./tasks/list.js";
 import {
   closeAccountWorkbench,
@@ -220,7 +221,7 @@ export function connectTaskEvents() {
 export function updateTasks(tasks, options = {}) {
   const snapshots = Array.isArray(tasks) ? tasks : [];
   const previousTasks = state.tasks;
-  state.tasks = options.incremental ? mergeTaskSnapshots(state.tasks, snapshots) : snapshots;
+  state.tasks = mergeTaskSnapshots(state.tasks, snapshots, { replace: !options.incremental });
   state.taskSummary = taskSummaryFromSnapshots(state.tasks);
   state.taskSequence = Math.max(
     state.taskSequence,
@@ -373,7 +374,7 @@ export function clearBrowserCredentialRecoveryState({ closeOwnedAssist = false }
   state.browserCredentialRecoveryAlias = "";
   state.browserCredentialRecoveryMode = "";
   state.browserCredentialRecoveryAssistTaskId = "";
-  if (!taskId) return;
+  if (!ownsAssist) return;
 
   ["credential-refresh-passwords", "credential-add-passwords"].forEach((id) => {
     const passwordInput = document.getElementById(id);
@@ -411,25 +412,15 @@ export function syncBrowserCredentialRecoveryTask(tasks) {
   const registrationTask =
     taskList.find(
       (task) =>
-        task &&
-        task.operation_kind === "account_registration" &&
-        ((task.phase === "waiting_for_user" &&
-          ["new_registration_credentials", "new_browser_credentials"].includes(task.waiting_for_input)) ||
-          (Array.isArray(task.waiting_items) &&
-            task.waiting_items.some(
-              (item) =>
-                item && ["new_registration_credentials", "new_browser_credentials"].includes(item.kind),
-            ))),
+        task?.operation_kind === "account_registration" &&
+        ["new_registration_credentials", "new_browser_credentials"].some((kind) => taskAwaitsInput(task, kind)),
     ) || null;
   syncRegistrationCredentialRecoveryTask(registrationTask);
   const waitingTask =
     taskList.find(
       (task) =>
-        task &&
         task !== registrationTask &&
-        ((task.phase === "waiting_for_user" && task.waiting_for_input === "new_browser_credentials") ||
-          (Array.isArray(task.waiting_items) &&
-            task.waiting_items.some((item) => item && item.kind === "new_browser_credentials"))),
+        taskAwaitsInput(task, "new_browser_credentials"),
     ) || null;
   if (!waitingTask) {
     clearBrowserCredentialRecoveryState({ closeOwnedAssist: true });
@@ -463,7 +454,9 @@ export function syncBrowserCredentialRecoveryTask(tasks) {
 
   if (unchanged) {
     const status = document.getElementById("credential-status");
-    setAccountAssistShortStatus(status, message);
+    if (state.browserCredentialRecoveryAssistTaskId === waitingTask.task_id) {
+      setAccountAssistShortStatus(status, message);
+    }
     return;
   }
 
@@ -484,6 +477,11 @@ export function syncBrowserCredentialRecoveryTask(tasks) {
     recoveryMode.id === "credential-add" ? "credential-add-passwords" : "credential-refresh-passwords",
   );
   if (passwordInput) passwordInput.value = "";
+  const submit = document.getElementById(`${recoveryMode.id}-submit`);
+  if (submit) {
+    submit.dataset.taskId = waitingTask.task_id;
+    submit.disabled = false;
+  }
   const status = document.getElementById("credential-status");
   setAccountAssistShortStatus(status, message);
 }
@@ -584,7 +582,7 @@ export function taskSnapshotCanReplace(current, incoming) {
   return !terminalTaskPhases.has(currentPhase) || terminalTaskPhases.has(incomingPhase);
 }
 
-export function mergeTaskSnapshots(existing, changed) {
+export function mergeTaskSnapshots(existing, changed, { replace = false } = {}) {
   const byId = new Map();
   for (const task of Array.isArray(existing) ? existing : []) {
     if (task && task.task_id) {
@@ -596,7 +594,18 @@ export function mergeTaskSnapshots(existing, changed) {
       byId.set(task.task_id, task);
     }
   }
-  return Array.from(byId.values());
+  const incomingIds = replace ? new Set(changed.map((task) => task?.task_id)) : null;
+  return Array.from(byId.values()).filter((task) => !incomingIds || incomingIds.has(task.task_id));
+}
+
+export async function credentialRecoveryTask(taskId, kind, itemId = "") {
+  if (!taskId) return null;
+  const tasks = await fetchJson(endpoints.tasks);
+  const task = (Array.isArray(tasks) ? tasks : []).find((item) => item.task_id === taskId);
+  if (task && isActiveTaskSnapshot(task) && !taskAwaitsInput(task, kind, itemId)) {
+    throw new Error("任务正在处理，请稍候再试");
+  }
+  return taskAwaitsInput(task, kind, itemId) ? task : null;
 }
 
 export function latestTaskSequence(tasks) {

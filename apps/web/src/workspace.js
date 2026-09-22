@@ -25,7 +25,9 @@ import {
   makeTaskId,
   retryTask,
   scheduleStatusClear,
+  isActiveTaskSnapshot,
 } from "./tasks/list.js";
+import { clearRegistrationAccountInputs } from "./registration.js";
 import { escapeAttr, escapeHtml, subscriptionLabelText } from "./format.js";
 import { postTaskResult, refresh } from "./sync.js";
 import { accountRemovalActions } from "./capabilities.js";
@@ -417,6 +419,10 @@ export function setActivePage(page, options = {}) {
   const nextPage = ["dashboard", "accounts", "registration", "resources", "settings"].includes(page)
     ? page
     : "accounts";
+  if (nextPage === "registration" && !options.preserveScroll
+    && !state.tasks.some((task) => task.operation_kind === "account_registration" && isActiveTaskSnapshot(task))) {
+    clearRegistrationAccountInputs();
+  }
   state.activePage = nextPage;
   const nav = document.querySelector(".sidebar-nav");
   const navIndex = ["dashboard", "accounts", "registration", "resources", "settings"].indexOf(nextPage);
@@ -514,6 +520,7 @@ export function openAccountTool(tool, options = {}) {
       : String(tool).replace(/"/g, '\\"');
   const target = document.querySelector(`[data-account-tool="${escapedTool}"]`);
   if (!target) return;
+  if (!options.recoveryTaskId) resetAccountEntryForms();
   const nextFocusId = options.focusId || "";
   if (state.activeAccountTool !== tool || state.activeAccountToolFocusId !== nextFocusId) {
     clearAccountAssistTransientStatuses();
@@ -550,6 +557,7 @@ export function openAccountTool(tool, options = {}) {
 }
 
 export function closeAccountWorkbench() {
+  resetAccountEntryForms();
   state.activeAccountTool = "";
   state.activeAccountToolFocusId = "";
   state.browserCredentialRecoveryAssistTaskId = "";
@@ -565,6 +573,19 @@ export function closeAccountWorkbench() {
   renderAccountSelectionStatus();
   renderAccountWorkbenchHeader();
   syncAccountAssistEntryControls();
+}
+
+export function resetAccountEntryForms() {
+  ["credential-add-form", "credential-refresh-form", "manual-cookie-form"].forEach((id) => {
+    const form = document.getElementById(id);
+    if (!form) return;
+    form.reset();
+    form.querySelectorAll("button[type=submit]").forEach((button) => {
+      delete button.dataset.taskId;
+      button.disabled = false;
+    });
+  });
+  clearAccountAssistTransientStatuses();
 }
 
 export function isPasswordTool(tool) {

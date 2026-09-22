@@ -168,6 +168,8 @@ export async function importManualCookieAccounts(event) {
   });
 
   let submittedEntriesText = "";
+  let submittedTaskId = "";
+  const ownsForm = () => !submittedTaskId || submit.dataset.taskId === submittedTaskId;
   try {
     submittedEntriesText = entriesInput.value;
     const entries = parseManualCookieEntries(submittedEntriesText);
@@ -178,6 +180,8 @@ export async function importManualCookieAccounts(event) {
     const fetchGitToken =
       postActions.includes("fetch_git_token") && document.getElementById("manual-cookie-git-token").checked;
     const taskId = makeTaskId("import-cookie", entries.map((entry) => entry.alias || entry.email).join(","));
+    submittedTaskId = taskId;
+    submit.dataset.taskId = taskId;
     const applyReport = (finalReport, phase = "completed", { refreshBeforeReport = true } = {}) => {
       const importReport = finalReport.import || finalReport;
       const validation = finalReport.validation || { failed_count: 0, items: [] };
@@ -195,7 +199,7 @@ export async function importManualCookieAccounts(event) {
         Array.isArray(finalReport.post_action_errors) && finalReport.post_action_errors.length > 0;
       const summary = `${Number(importReport.imported_count || 0)} 个已导入，${Number(importReport.skipped_duplicate_email_count || 0)} 个重复邮箱已跳过，${Number(importReport.alias_conflict_count || 0)} 个别名冲突${validationSummary}${postActionSummary}`;
       const publishReport = () => {
-        const currentStatus = accountAssistStatusForMode("io", modeId, status);
+        const currentStatus = ownsForm() ? accountAssistStatusForMode("io", modeId, status) : null;
         const inputUnchanged = entriesInput.value === submittedEntriesText;
         if (currentStatus && validationFailures.length > 0 && inputUnchanged) {
           entriesInput.value = validationFailures
@@ -272,6 +276,7 @@ export async function importManualCookieAccounts(event) {
         missingShortMessage: "Cookie 导入未完成，请检查日志",
         resultFailureShortMessage: "Cookie 导入结果处理失败，请检查日志",
         allowFailedResult: true,
+        ownsForm,
         onResult: (finalReport, phase) => applyReport(finalReport, phase, { refreshBeforeReport: false }),
       });
       return;
@@ -280,6 +285,7 @@ export async function importManualCookieAccounts(event) {
   } catch (error) {
     if (
       error.kind === "invalid_session_cookie" &&
+      ownsForm() &&
       accountAssistModeIsActive("io", modeId) &&
       entriesInput.value === submittedEntriesText
     ) {
@@ -287,7 +293,7 @@ export async function importManualCookieAccounts(event) {
       entriesInput.focus();
     }
     reportUiOperationFailure({
-      status: accountAssistStatusForMode("io", modeId, status),
+      status: ownsForm() ? accountAssistStatusForMode("io", modeId, status) : null,
       shortMessage: "Cookie 登录失败，请检查日志",
       title: "Cookie 登录失败",
       scope: "Cookie 登录",
@@ -295,7 +301,7 @@ export async function importManualCookieAccounts(event) {
       error,
     });
   } finally {
-    if (!pendingTask) submit.disabled = false;
+    if (!pendingTask && ownsForm()) submit.disabled = false;
   }
 }
 

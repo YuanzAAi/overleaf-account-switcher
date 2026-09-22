@@ -3,7 +3,7 @@ import {
   setAccountAssistShortStatus,
 } from "./feedback.js";
 import { MINIMUM_NEW_PASSWORD_LENGTH, endpoints, state } from "./state.js";
-import { postJson, refresh, updateTasks } from "./sync.js";
+import { credentialRecoveryTask, postJson, refresh, updateTasks } from "./sync.js";
 import {
   isActiveTaskSnapshot,
   makeTaskId,
@@ -16,6 +16,14 @@ import { registrationActions } from "./capabilities.js";
 
 export function registrationUsesExistingAccount() {
   return document.getElementById("registration-source")?.value === "existing";
+}
+
+export function clearRegistrationAccountInputs() {
+  ["registration-alias", "registration-email", "registration-password", "registration-session-cookie"].forEach((id) => {
+    const input = document.getElementById(id);
+    if (input) input.value = "";
+  });
+  setRegistrationStatus("");
 }
 
 export function registrationExistingLoginSource() {
@@ -273,8 +281,9 @@ export async function startRegistration(event) {
 
   try {
     const recoveryTaskId = state.registrationCredentialRecoveryTaskId;
-    if (recoveryTaskId) {
-      const recoveryKind = state.registrationCredentialRecoveryKind;
+    const recoveryKind = state.registrationCredentialRecoveryKind;
+    const recovery = await credentialRecoveryTask(recoveryTaskId, recoveryKind);
+    if (recovery) {
       if (!["new_registration_credentials", "new_browser_credentials"].includes(recoveryKind)) {
         setRegistrationStatus("当前试用任务的恢复状态无效，请刷新后重试", "error");
         return;
@@ -291,7 +300,7 @@ export async function startRegistration(event) {
         return;
       }
       requestStarted = true;
-      await postJson(endpoints.taskInput, {
+      const snapshot = await postJson(endpoints.taskInput, {
         task_id: recoveryTaskId,
         kind: recoveryKind,
         value:
@@ -302,8 +311,12 @@ export async function startRegistration(event) {
       state.registrationCredentialRecoveryTaskId = "";
       state.registrationCredentialRecoveryKind = "";
       setRegistrationStatus("已提交凭据，正在继续原试用任务", "warning");
+      updateTasks([snapshot], { incremental: true });
       return;
     }
+
+    state.registrationCredentialRecoveryTaskId = "";
+    state.registrationCredentialRecoveryKind = "";
 
     const payload = {
       trial_days: trialDays,
