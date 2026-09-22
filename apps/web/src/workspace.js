@@ -552,7 +552,7 @@ export function openAccountTool(tool, options = {}) {
     behavior: "smooth",
   });
   if (options.focusId) {
-    window.setTimeout(() => document.getElementById(options.focusId)?.focus(), 60);
+    document.getElementById(options.focusId)?.focus({ preventScroll: true });
   }
 }
 
@@ -1376,7 +1376,7 @@ export function handlePageClick(event) {
         replaceSelectedAliases([]);
       }
       renderAccountSelectionStatus();
-      window.setTimeout(() => document.getElementById(mode.focusId)?.focus(), 60);
+      document.getElementById(mode.focusId)?.focus({ preventScroll: true });
     }
     return;
   }
