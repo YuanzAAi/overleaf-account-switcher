@@ -53,6 +53,7 @@ import { fetchJson } from "../http.js";
 import { clearBrowserCredentialRecoveryState, credentialRecoveryTask, postJson, postTaskResult, refresh, updateTasks } from "../sync.js";
 import { escapeHtml, pill, writeClipboard } from "../format.js";
 import { iconSvg } from "../icons.js";
+import { openProjectManagers, selectMigrationProjects } from "./projects.js";
 
 export function performAccountBulkAction(action, aliases, button) {
   return performAccountAction(action, splitAliasText(aliases), button, true);
@@ -65,6 +66,10 @@ export function handleAccountAction(button) {
 async function performAccountAction(action, aliases, button, bulk) {
   const aliasList = aliases.filter(Boolean);
   if (!action || !aliasList.length || !button || button.disabled) return;
+  if (action === "projects") {
+    openProjectManagers(aliasList);
+    return;
+  }
   const status = document.getElementById("account-action-status");
   const descriptor = accountActionDescriptor(action, bulk);
   const actions = bulk ? accountBulkActions() : accountRowActions();
@@ -89,23 +94,27 @@ async function performAccountAction(action, aliases, button, bulk) {
   const busySnapshot = beginActionButtonBusy(button);
   const terminalOptions = { action, aliasList, button, busySnapshot, status, descriptor };
   let pendingTask = false;
-  reportUiOperationStart({
-    status, shortMessage: "处理中", scope: descriptor.scope, route: descriptor.endpoint,
-    message: bulk
-      ? `已提交 ${descriptor.title}，目标 ${aliasList.length} 个账号。`
-      : `已为账号 ${aliasText} 提交${descriptor.title}。`,
-  });
-
   try {
     const payload = { task_id: makeTaskId(action, aliasText) };
     if (action === "switch-plan" || action === "switch-execute") {
       payload.alias = aliasText;
       payload.migrate_projects = accountToolbarMigratesProjects();
+      if (action === "switch-execute" && payload.migrate_projects) {
+        const selection = await selectMigrationProjects(aliasText);
+        if (!selection) return;
+        Object.assign(payload, selection);
+      }
       if (action === "switch-execute") payload.sync_skills = syncSkillsOnSwitch();
     } else {
       payload.aliases = aliasText;
       if (action === "refresh-session") payload.passwords = "";
     }
+    reportUiOperationStart({
+      status, shortMessage: "处理中", scope: descriptor.scope, route: descriptor.endpoint,
+      message: bulk
+        ? `已提交 ${descriptor.title}，目标 ${aliasList.length} 个账号。`
+        : `已为账号 ${aliasText} 提交${descriptor.title}。`,
+    });
     const report = await postJson(descriptor.endpoint, payload);
     if (isActiveTaskSnapshot(report)) {
       pendingTask = true;
@@ -303,18 +312,17 @@ export async function executeAccountSwitch() {
 
   const busySnapshot = beginActionButtonBusy(button);
   let pendingTask = false;
-  reportUiOperationStart({
-    status,
-    shortMessage: "正在切换",
-    scope: "执行账号换号",
-    route: endpoints.switchExecute,
-    message: "正在执行扩展换号命令。",
-  });
-
   try {
     const alias = aliasesFromInputOrSelection("switch-alias", { single: true });
     const taskId = makeTaskId(action, alias);
+    const selection = migrateProjects ? await selectMigrationProjects(alias) : {};
+    if (!selection) return;
+    reportUiOperationStart({
+      status, shortMessage: "正在切换", scope: "执行账号换号", route: endpoints.switchExecute,
+      message: "正在执行扩展换号命令。",
+    });
     const report = await postJson(endpoints.switchExecute, {
+      ...selection,
       alias,
       migrate_projects: migrateProjects,
       sync_skills: syncSkillsOnSwitch(),

@@ -185,11 +185,13 @@ export async function loadRegistrationEligibleAliases(requestVersion = null) {
     )
       return;
     state.registrationEligibleAliases = eligibleAliases;
-    replaceSelectOptions(select, eligibleAliases, "没有可用试用资格的账号");
+    const failedCount = Number(report.failed_count || 0);
+    replaceSelectOptions(select, eligibleAliases, failedCount ? "部分账号检测失败，请重试" : "没有可用试用资格的账号");
     select.disabled = eligibleAliases.length === 0;
     setRegistrationStatus(
-      eligibleAliases.length ? `可试用账号 ${eligibleAliases.length} 个` : "没有确认可用的试用账号",
-      eligibleAliases.length ? "success" : "warning",
+      failedCount ? `${eligibleAliases.length} 个可试用，${failedCount} 个检测失败，请重试`
+        : eligibleAliases.length ? `可试用账号 ${eligibleAliases.length} 个` : "没有可用试用资格的账号",
+      eligibleAliases.length && !failedCount ? "success" : "warning",
     );
   } catch (error) {
     if (

@@ -267,11 +267,18 @@ pub struct TaskRetryPayload {
     pub migrate_projects: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sync_skills: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_alias: Option<String>,
 }
 
 impl TaskRetryPayload {
     fn is_empty(&self) -> bool {
-        self.migrate_projects.is_none() && self.sync_skills.is_none()
+        self.migrate_projects.is_none()
+            && self.sync_skills.is_none()
+            && self.project_ids.is_none()
+            && self.source_alias.is_none()
     }
 }
 

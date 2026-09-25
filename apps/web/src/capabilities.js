@@ -8,7 +8,7 @@ import { syncAccountTaskLocks } from "./accounts/list.js";
 export function accountRowActions(capabilities = null) {
   return capabilityChoices(
     "account_row_actions",
-    ["refresh-session", "refresh-git", "generate-git", "browser-login", "switch-plan", "switch-execute"],
+    ["refresh-session", "refresh-git", "generate-git", "projects", "switch-plan", "switch-execute"],
     capabilities,
   );
 }
@@ -16,7 +16,7 @@ export function accountRowActions(capabilities = null) {
 export function accountBulkActions(capabilities = null) {
   return capabilityChoices(
     "account_bulk_actions",
-    ["refresh-session", "refresh-git", "generate-git", "browser-login"],
+    ["refresh-session", "refresh-git", "generate-git", "projects"],
     capabilities,
   );
 }
@@ -396,6 +396,7 @@ export function accountBulkActionTitle(action) {
       "refresh-git": "批量刷新 Git 令牌状态",
       "generate-git": "批量获取 Git 令牌",
       "browser-login": "为选中账号打开浏览器登录窗口",
+      "projects": "管理选中账号的项目",
     }[action] || ""
   );
 }

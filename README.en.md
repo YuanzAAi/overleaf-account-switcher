@@ -48,7 +48,7 @@ An agent can handle much of a LaTeX writing workflow, but going all-in on agents
 | Account management | Card and list views, search and filters, bulk selection, aliases, password login, Cookie import, queued file imports, and single-file or multi-file exports. |
 | Sessions and credentials | Cookie identity checks and password-based recovery, Git token retrieval and generation, local password updates, remote password changes, and credential copying and status checks. |
 | Browser account switching | Switch within the current Chrome profile, verify the target identity, refresh subscription information, and optionally migrate projects and synchronize skills credentials. |
-| Project management | Migration previews, copies of owned projects, rejoining shared projects, target-access checks, remote project cleanup, and local account removal. |
+| Project management | Independent per-account project windows with copy, rename, ZIP download, PDF compilation, archive, and trash controls; choose projects before switching while preserving their order and verifying target access. |
 | Overleaf Skills | Install, update, and uninstall Codex / Claude Code skills for project reads and edits, Git history, cloud compilation, and PDF / source / log downloads. |
 | Registration and subscriptions | Registration, reCAPTCHA and email verification, address and payment forms, trial eligibility checks, plan changes, trial extensions, and cancellation of renewal. |
 | Cards and addresses | Bulk card entry, status changes, selected exports and deletion, plus address retrieval, selection, and copying. |

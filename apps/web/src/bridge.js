@@ -27,6 +27,10 @@ export function resolveTauriWriteTextFile() {
   return desktopCommand("writeTextFile");
 }
 
+export function resolveTauriWriteBinaryFile() {
+  return desktopCommand("writeBinaryFile");
+}
+
 export function resolveTauriWriteClipboardText() {
   const write = desktopCommand("writeClipboardText");
   return write ? (text) => write(String(text ?? "")) : null;

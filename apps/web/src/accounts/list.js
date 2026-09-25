@@ -144,7 +144,7 @@ export function sortAccountsForDisplay(accounts) {
   const sortMode = state.accountSort || "import-order";
   if (sortMode === "import-order") {
     decorated.sort(
-      (a, b) => accountImportOrderValue(a.account) - accountImportOrderValue(b.account) || fallback(a, b),
+      (a, b) => accountImportOrderValue(b.account) - accountImportOrderValue(a.account) || fallback(a, b),
     );
     return decorated.map((item) => item.account);
   }
@@ -340,7 +340,7 @@ export function accountRemainingDays(account) {
 
 export function accountImportOrderValue(account) {
   const created = Number(account && account.created_at);
-  return Number.isFinite(created) && created > 0 ? created : Number.MAX_SAFE_INTEGER;
+  return Number.isFinite(created) && created > 0 ? created : 0;
 }
 
 export function secretNeedsAttention(secret) {
@@ -623,7 +623,7 @@ export function accountActionLabel(action) {
       "refresh-session": "Cookie",
       "refresh-git": "Git",
       "generate-git": "令牌",
-      "browser-login": "浏览器",
+      "projects": "项目",
       "switch-plan": "计划",
       "switch-execute": "换号",
     }[action] || action
@@ -715,7 +715,7 @@ export function accountActionTitle(action) {
       "refresh-session": "刷新 Cookie",
       "refresh-git": "刷新 Git 令牌状态",
       "generate-git": "生成 Git 令牌",
-      "browser-login": "打开浏览器登录窗口",
+      "projects": "项目管理",
     }[action] || ""
   );
 }
@@ -736,7 +736,7 @@ export function accountActionIcon(action) {
       "refresh-session": iconSvg("refresh"),
       "refresh-git": iconSvg("git"),
       "generate-git": iconSvg("key"),
-      "browser-login": iconSvg("external"),
+      "projects": iconSvg("folder"),
     }[action] || iconSvg("circle")
   );
 }
@@ -1000,6 +1000,7 @@ export function accountActionDescriptor(action, bulk = false) {
     "refresh-git": { endpoint: endpoints.gitTokenRefresh, title: "刷新 Git 令牌状态" },
     "generate-git": { endpoint: endpoints.gitTokenGenerate, title: "获取 Git 令牌" },
     "browser-login": { endpoint: endpoints.browserLogin, title: "打开浏览器登录" },
+    "projects": { endpoint: endpoints.projects, title: "项目管理" },
     "switch-plan": { endpoint: endpoints.switchPlan, title: "生成换号计划" },
     "switch-execute": { endpoint: endpoints.switchExecute, title: "执行无感换号" },
   }[action];

@@ -18,6 +18,10 @@ struct AccountSwitchExecuteRequest {
     #[serde(default)]
     sync_skills: bool,
     #[serde(default)]
+    project_ids: Option<Vec<String>>,
+    #[serde(default)]
+    source_alias: Option<String>,
+    #[serde(default)]
     task_id: Option<String>,
 }
 
@@ -32,18 +36,36 @@ struct AccountSwitchProjectPreviewRequest {
 struct TaskProjectMigrationControl {
     shared_state: Arc<StdMutex<ApiState>>,
     task_id: String,
+    selection: TaskRetryPayload,
 }
 
 impl TaskProjectMigrationControl {
     fn new(shared_state: Arc<StdMutex<ApiState>>, task_id: impl Into<String>) -> Self {
+        let task_id = task_id.into();
+        let selection = shared_state
+            .lock()
+            .ok()
+            .and_then(|state| state.tasks.snapshot(&task_id).ok())
+            .and_then(|task| task.retry_descriptor)
+            .map(|retry| retry.payload)
+            .unwrap_or_default();
         Self {
             shared_state,
-            task_id: task_id.into(),
+            task_id,
+            selection,
         }
     }
 }
 
 impl ProjectMigrationControl for TaskProjectMigrationControl {
+    fn selected_project_ids(&self) -> Option<&[String]> {
+        self.selection.project_ids.as_deref()
+    }
+
+    fn expected_source_alias(&self) -> Option<&str> {
+        self.selection.source_alias.as_deref()
+    }
+
     fn is_cancel_requested(&self) -> bool {
         browser_task_cancel_requested(&self.shared_state, &self.task_id)
     }
@@ -189,6 +211,23 @@ pub(super) fn execute_account_switch_response(
         Ok(request) => request,
         Err(response) => return response,
     };
+    if request.project_ids.as_ref().is_some_and(|ids| {
+        ids.iter()
+            .any(|id| id.len() != 24 || !id.bytes().all(|c| c.is_ascii_hexdigit()))
+    }) || (request.migrate_projects
+        && request.project_ids.is_some()
+        && request
+            .source_alias
+            .as_deref()
+            .is_none_or(|alias| alias.trim().is_empty()))
+    {
+        return json_response(
+            400,
+            &ApiErrorBody {
+                error: "迁移项目选择无效，请重新选择".into(),
+            },
+        );
+    }
 
     let alias = request.alias.trim().to_string();
     if alias.is_empty() {
@@ -201,6 +240,32 @@ pub(super) fn execute_account_switch_response(
             .as_nanos();
         format!("account-switch-{stamp}")
     });
+    if request.migrate_projects {
+        let source = request.source_alias.clone().or_else(|| {
+            AccountStore::new(state.config.accounts_path())
+                .load()
+                .ok()
+                .and_then(|document| document.current)
+        });
+        if source.is_some_and(|source| {
+            state.tasks.list_snapshots().iter().any(|task| {
+                task.locked_aliases.contains(&source)
+                    && !matches!(
+                        task.phase,
+                        ServiceTaskPhase::Completed
+                            | ServiceTaskPhase::Failed
+                            | ServiceTaskPhase::Cancelled
+                    )
+            })
+        }) {
+            return json_response(
+                409,
+                &ApiErrorBody {
+                    error: "源账号还有任务正在执行，请等待完成后再迁移".into(),
+                },
+            );
+        }
+    }
     if state.tasks.list_snapshots().iter().any(|task| {
         task.operation_kind == Some(TaskOperationKind::AccountSwitchExecute)
             && matches!(
@@ -225,6 +290,8 @@ pub(super) fn execute_account_switch_response(
         TaskRetryPayload {
             migrate_projects: Some(request.migrate_projects),
             sync_skills: Some(request.sync_skills),
+            project_ids: request.project_ids,
+            source_alias: request.source_alias,
         },
     ) {
         return response;

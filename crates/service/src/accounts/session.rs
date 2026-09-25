@@ -322,6 +322,11 @@ pub async fn inspect_account_trial_eligibility<T: SessionTransport>(
         .fetch_trial_eligibility(now_unix, trial_days)
         .await
         .map_err(AccountSessionError::from_session)?;
+    if status.eligibility == TrialEligibility::Unknown {
+        return Err(AccountSessionError::Session {
+            message: "试用资格检测失败，请重试".into(),
+        });
+    }
 
     Ok(AccountTrialEligibilityReport {
         alias: alias.to_string(),

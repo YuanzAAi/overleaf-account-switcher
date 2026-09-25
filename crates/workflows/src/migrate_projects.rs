@@ -50,7 +50,7 @@ pub fn rate_limit_wait_seconds(retry_index: u32) -> u64 {
 pub fn plan_project_migrations(projects: &[Project]) -> Vec<ProjectMigrationPlan> {
     let mut active_projects = projects
         .iter()
-        .filter(|project| !project.trashed)
+        .filter(|project| project.is_active())
         .collect::<Vec<_>>();
     // Overleaf 默认把最新创建/更新的项目排在前面。按源项目更新时间从旧到新
     // 逐个创建副本，才能让目标账号最终保持与源账号相同的展示顺序。

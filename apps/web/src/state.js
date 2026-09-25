@@ -28,6 +28,7 @@ export const endpoints = {
   gitTokenRefresh: "/accounts/git-token/refresh",
   gitTokenGenerate: "/accounts/git-token/generate",
   browserLogin: "/accounts/browser-login",
+  projects: "/accounts/projects",
   switchPlan: "/accounts/switch/plan",
   switchProjectPreview: "/accounts/switch/projects/preview",
   switchExecute: "/accounts/switch/execute",

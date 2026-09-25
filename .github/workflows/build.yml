@@ -20,6 +20,7 @@ jobs:
     outputs:
       publish: ${{ steps.release.outputs.publish }}
       tag: ${{ steps.release.outputs.tag }}
+      existing: ${{ steps.release.outputs.existing }}
     steps:
       - uses: actions/checkout@v7.0.1
       - id: release
@@ -29,6 +30,7 @@ jobs:
         run: |
           publish=false
           tag=''
+          existing=false
           if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/tags/v* ]]; then
             publish=true
             tag="$GITHUB_REF_NAME"
@@ -39,9 +41,13 @@ jobs:
           fi
           if [[ "$publish" == true ]]; then
             test "$tag" = "v$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
+            if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --silent; then
+              existing=true
+            fi
           fi
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "existing=$existing" >> "$GITHUB_OUTPUT"
   desktop:
     needs: prepare
     name: Desktop (${{ matrix.name }})
@@ -244,7 +250,7 @@ jobs:
           test -s overleaf-macos-x64-portable.zip
           sha256sum ./*.exe ./*.zip > SHA256SUMS
       - uses: softprops/action-gh-release@v3.0.3
-        if: github.event_name == 'push'
+        if: needs.prepare.outputs.existing != 'true'
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
           generate_release_notes: ${{ github.event_name == 'push' }}
@@ -260,7 +266,7 @@ jobs:
             release/*-portable.zip
             release/SHA256SUMS
       - name: Replace existing release assets
-        if: github.event_name == 'workflow_dispatch'
+        if: needs.prepare.outputs.existing == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

@@ -40,6 +40,7 @@ const DESKTOP_BRIDGE_SCRIPT: &str = r#"
     openDialog: (options = {}) => tauriInvoke("plugin:dialog|open", { options }),
     saveDialog: (options = {}) => tauriInvoke("plugin:dialog|save", { options }),
     writeTextFile: (path, text) => tauriInvoke("desktop_write_text_file", { path, text }),
+    writeBinaryFile: (path, data) => tauriInvoke("desktop_write_binary_file", { path, data }),
     writeClipboardText: (text) => tauriInvoke("desktop_write_clipboard_text", { text }),
     focusMainWindow: () => tauriInvoke("desktop_focus_main_window"),
     installUpdate: (tag) => tauriInvoke("desktop_install_update", { tag }),
@@ -124,6 +125,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::desktop_write_text_file,
+            commands::desktop_write_binary_file,
             commands::desktop_write_clipboard_text,
             commands::desktop_focus_main_window,
             commands::desktop_open_chrome_extensions,

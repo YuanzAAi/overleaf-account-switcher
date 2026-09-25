@@ -173,6 +173,17 @@ fn handle_connection(
         );
     }
 
+    if request_path(target) == "/accounts/projects" {
+        let response = crate::api::projects::handle(&state, method, request_body(&request));
+        return write_raw_response(
+            &mut stream,
+            response.status_code,
+            response.status_text(),
+            response.content_type,
+            &response.body,
+        );
+    }
+
     let (response, background_jobs) = match ui_asset_response(method, target) {
         Some(response) => (response, Vec::new()),
         None => {

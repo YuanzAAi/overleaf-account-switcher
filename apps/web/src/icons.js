@@ -89,6 +89,8 @@ export function iconSvg(name) {
 }
 
 export function setupIcons() {
+  const projects = document.querySelector("[data-project-manager-icon]");
+  if (projects) projects.outerHTML = iconSvg("folder");
   const addSymbol = document.querySelector(".account-add-trigger > [aria-hidden]");
   if (addSymbol) addSymbol.outerHTML = iconSvg("add");
   for (const [id, name] of [["card-export", "download"], ["card-delete", "trash"], ["runtime-diagnostics", "info"], ["task-browser-open", "monitor"], ["check-updates", "refresh"], ["install-update", "download"], ["download-update", "download"], ["copy-update-command", "copy"]]) {

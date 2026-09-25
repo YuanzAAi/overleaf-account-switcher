@@ -41,6 +41,7 @@ use overleaf_workflows::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+pub(crate) mod projects;
 mod registration;
 use registration::{
     cancel_task_with_registration_release, continue_existing_trial_response,
@@ -164,6 +165,7 @@ pub const SERVICE_API_ROUTES: &[ServiceApiRouteSpec] = &[
     service_route("/accounts/git-token/refresh", &["POST"]),
     service_route("/accounts/git-token/generate", &["POST"]),
     service_route("/accounts/browser-login", &["POST"]),
+    service_route("/accounts/projects", &["POST"]),
     service_route("/accounts/switch/plan", &["POST"]),
     service_route("/accounts/switch/projects/preview", &["POST"]),
     service_route("/accounts/switch/execute", &["POST"]),
@@ -2466,6 +2468,8 @@ fn retry_operation_from_descriptor(
                 "alias": alias,
                 "migrate_projects": payload.migrate_projects.unwrap_or(false),
                 "sync_skills": payload.sync_skills.unwrap_or(false),
+                "project_ids": payload.project_ids,
+                "source_alias": payload.source_alias,
                 "task_id": retry_task_id
             })
             .to_string()

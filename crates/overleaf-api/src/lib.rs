@@ -491,18 +491,28 @@ pub fn parse_trial_plan_availability(
     {
         return TrialPlanAvailability::ExistingSubscription;
     }
-    if status != 200 || !effective_url.contains("/user/subscription/new") {
+    if status != 200
+        || !reqwest::Url::parse(&effective_url).ok().is_some_and(|url| {
+            matches!(
+                url.path(),
+                "/user/subscription/new" | "/user-scalable/subscription/new"
+            )
+        })
+    {
         return TrialPlanAvailability::Unknown;
     }
 
-    let html = page_html.to_ascii_lowercase();
-    let plan_code = plan_code.to_ascii_lowercase();
-    let has_trial_plan =
-        effective_url.contains(&format!("plancode={plan_code}")) || html.contains(&plan_code);
-    if has_trial_plan {
-        TrialPlanAvailability::Available
-    } else {
-        TrialPlanAvailability::Unknown
+    let requested_plan = reqwest::Url::parse(&effective_url).ok().is_some_and(|url| {
+        url.query_pairs()
+            .any(|(key, value)| key == "plancode" && value == plan_code.to_ascii_lowercase())
+    });
+    // 套餐链接和 Free 状态不能证明试用资格，必须读取服务端的资格判断。
+    match meta_boolean(page_html, "ol-userCanNotStartRequestedTrial") {
+        Some(true) => TrialPlanAvailability::ExistingSubscription,
+        Some(false) if requested_plan && extract_csrf_token(page_html).is_some() => {
+            TrialPlanAvailability::Available
+        }
+        _ => TrialPlanAvailability::Unknown,
     }
 }
 

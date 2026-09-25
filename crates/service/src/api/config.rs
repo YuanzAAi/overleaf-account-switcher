@@ -533,16 +533,11 @@ fn api_capabilities_status() -> ApiCapabilityStatus {
             "refresh-session",
             "refresh-git",
             "generate-git",
-            "browser-login",
+            "projects",
             "switch-plan",
             "switch-execute",
         ],
-        account_bulk_actions: vec![
-            "refresh-session",
-            "refresh-git",
-            "generate-git",
-            "browser-login",
-        ],
+        account_bulk_actions: vec!["refresh-session", "refresh-git", "generate-git", "projects"],
         account_switch_actions: vec!["plan", "preview-projects", "execute"],
         account_removal_actions: vec![
             "preview-remote-cleanup",

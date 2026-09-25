@@ -13,6 +13,7 @@ tauri-build = { version = "2.0.0", default-features = false, features = ["config
 
 [dependencies]
 arboard = "3.6.1"
+base64 = "0.22"
 overleaf-browser = { path = "../../../crates/browser" }
 overleaf-service = { path = "../../../crates/service" }
 overleaf-storage = { path = "../../../crates/storage" }

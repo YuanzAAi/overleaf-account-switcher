@@ -217,6 +217,42 @@ impl ReqwestProjectApiTransport {
         self
     }
 
+    pub async fn download(&self, path: &str) -> ProjectApiResult<Vec<u8>> {
+        let base = reqwest::Url::parse("https://www.overleaf.com").unwrap();
+        let url = base
+            .join(path)
+            .map_err(|e| ProjectApiTransportError::new(e.to_string()))?;
+        if url.origin() != base.origin() || !url.username().is_empty() || url.password().is_some() {
+            return Err(ProjectApiTransportError::new("invalid project download URL").into());
+        }
+        let prepared = self.prepare_request(&projects_request())?;
+        let headers =
+            header_map_from_strings(&prepared.headers).map_err(ProjectApiTransportError::new)?;
+        let mut response = self
+            .client
+            .get(url)
+            .headers(headers)
+            .timeout(std::time::Duration::from_secs(180))
+            .send()
+            .await
+            .map_err(|e| ProjectApiTransportError::new(e.to_string()))?;
+        ensure_project_api_success(response.status().as_u16(), "")?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| ProjectApiTransportError::new(e.to_string()))?
+        {
+            if bytes.len() + chunk.len() > 128 * 1024 * 1024 {
+                return Err(
+                    ProjectApiTransportError::new("project download exceeds 128 MiB").into(),
+                );
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    }
+
     pub fn prepare_request(
         &self,
         request: &ProjectApiRequest,
@@ -278,7 +314,10 @@ impl ProjectApiTransport for ReqwestProjectApiTransport {
             HttpMethod::Delete => reqwest::Method::DELETE,
         };
 
-        let mut builder = self.client.request(method, &prepared.url);
+        let mut builder = self
+            .client
+            .request(method, &prepared.url)
+            .timeout(std::time::Duration::from_secs(180));
         let headers = header_map_from_strings(&prepared.headers).map_err(|message| {
             ProjectApiTransportError {
                 kind: ProjectApiTransportErrorKind::InvalidHeader,
@@ -322,6 +361,57 @@ impl<T> ProjectApiClient<T> {
 }
 
 impl<T: ProjectApiTransport> ProjectApiClient<T> {
+    pub async fn set_archived(&self, project_id: &str, archived: bool) -> ProjectApiResult<()> {
+        self.set_project_flag(project_id, "archive", archived).await
+    }
+
+    pub async fn set_trashed(&self, project_id: &str, trashed: bool) -> ProjectApiResult<()> {
+        self.set_project_flag(project_id, "trash", trashed).await
+    }
+
+    async fn set_project_flag(
+        &self,
+        project_id: &str,
+        flag: &str,
+        enabled: bool,
+    ) -> ProjectApiResult<()> {
+        let response = self
+            .send(request(
+                if enabled {
+                    HttpMethod::Post
+                } else {
+                    HttpMethod::Delete
+                },
+                format!("/project/{}/{flag}", path_part(project_id)),
+                None,
+                true,
+            ))
+            .await?;
+        Ok(ensure_project_api_success(response.status, &response.body)?)
+    }
+
+    pub async fn rename_project(&self, project_id: &str, name: &str) -> ProjectApiResult<()> {
+        let response = self.send(rename_project_request(project_id, name)).await?;
+        Ok(ensure_project_api_success(response.status, &response.body)?)
+    }
+
+    pub async fn compile_project(&self, project_id: &str) -> ProjectApiResult<Value> {
+        let response = self
+            .send(request(
+                HttpMethod::Post,
+                format!("/project/{}/compile", path_part(project_id)),
+                Some(
+                    json!({"check":"silent", "draft":false, "incrementalCompilesEnabled":true,
+                "stopOnFirstError":false}),
+                ),
+                true,
+            ))
+            .await?;
+        ensure_project_api_success(response.status, &response.body)?;
+        serde_json::from_str(&response.body)
+            .map_err(|e| ProjectApiParseError::new(e.to_string()).into())
+    }
+
     pub async fn list_projects(&self) -> ProjectApiResult<Vec<Project>> {
         let response = self.send(projects_request()).await?;
         parse_projects_response(response.status, &response.body)
@@ -457,7 +547,7 @@ pub fn clone_project_request(project_id: &str, new_name: Option<&str>) -> Projec
 
     request(
         HttpMethod::Post,
-        format!("/Project/{}/clone", path_part(project_id)),
+        format!("/project/{}/clone", path_part(project_id)),
         Some(body),
         true,
     )
@@ -556,23 +646,17 @@ pub fn ensure_project_api_success(status: u16, body: &str) -> Result<(), Project
 
 pub fn parse_projects_response(status: u16, body: &str) -> ProjectApiResult<Vec<Project>> {
     ensure_project_api_success(status, body)?;
-    let projects = parse_prefetched_projects(body)?;
-    if !projects.is_empty() {
-        return Ok(projects);
-    }
-
     let trimmed = body.trim_start();
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
         return Ok(parse_projects_json(body)?);
     }
-
-    Ok(projects)
+    Ok(parse_prefetched_projects(body)?)
 }
 
 pub fn parse_prefetched_projects(page_html: &str) -> Result<Vec<Project>, ProjectApiParseError> {
-    let Some(raw) = crate::extract_meta_content(page_html, "ol-prefetchedProjectsBlob") else {
-        return Ok(Vec::new());
-    };
+    let raw = crate::extract_meta_content(page_html, "ol-prefetchedProjectsBlob")
+        .or_else(|| crate::extract_meta_content(page_html, "ol-projects"))
+        .ok_or_else(|| ProjectApiParseError::new("project list is missing from the page"))?;
     parse_projects_json(&raw)
 }
 
@@ -655,7 +739,9 @@ pub fn parse_join_grant_response(
 
 pub fn parse_clone_project_id(raw_json: &str) -> Result<Option<String>, ProjectApiParseError> {
     let value = parse_json(raw_json)?;
-    Ok(string_field(&value, "project_id").or_else(|| string_field(&value, "_id")))
+    Ok(string_field(&value, "project_id")
+        .or_else(|| string_field(&value, "id"))
+        .or_else(|| string_field(&value, "_id")))
 }
 
 pub fn parse_clone_project_response(status: u16, body: &str) -> ProjectApiResult<Option<String>> {
@@ -753,10 +839,25 @@ fn parse_project_value(value: &Value) -> Option<Project> {
         .get("owner")
         .and_then(|owner| string_field(owner, "email"))
         .or_else(|| string_field(value, "ownerEmail"));
+    project.owner_name = value.get("owner").and_then(|owner| {
+        let name = [
+            string_field(owner, "firstName"),
+            string_field(owner, "lastName"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ");
+        (!name.is_empty()).then_some(name)
+    });
     project.last_updated =
         string_field(value, "lastUpdated").or_else(|| string_field(value, "last_updated"));
     project.trashed = value
         .get("trashed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    project.archived = value
+        .get("archived")
         .and_then(Value::as_bool)
         .unwrap_or(false);
 

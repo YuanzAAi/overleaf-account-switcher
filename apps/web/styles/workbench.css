@@ -1497,3 +1497,50 @@ a.ui-btn { text-decoration: none; }
 
 .skill-path { flex-basis: 100%; overflow-wrap: anywhere; }
 .skill-row .settings-action-row { margin-top: 0; }
+
+.project-window {
+  position: fixed;
+  width: min(960px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 110px);
+  padding: 0;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  overflow: auto;
+}
+.project-window::backdrop { background: #0006; }
+.project-window-head, .project-window-tools, .project-window footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+}
+.project-window-head { justify-content: space-between; border-bottom: 1px solid var(--line); cursor: move; touch-action: none; }
+.project-window-head strong { font-size: 15px; overflow-wrap: anywhere; }
+.project-window-tools input { flex: 1; min-width: 100px; }
+.project-window-tools select { width: auto; }
+.project-window-table { max-height: 48dvh; overflow: auto; }
+.project-window table { width: 100%; border-collapse: collapse; }
+.project-window th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.project-window td, .project-window th { padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.project-window .project-pick { width: 36px; }
+.project-window tbody tr { cursor: pointer; }
+.project-window tbody tr:hover { background: var(--surface-soft); }
+.project-window tbody tr.selected { background: var(--theme-wash); }
+.project-window .project-name { min-width: 140px; max-width: 320px; overflow-wrap: anywhere; font-weight: 500; }
+.project-window .project-date { text-align: right; white-space: nowrap; }
+.project-window th:nth-child(4) { text-align: right; }
+.project-window .actions { display: flex; gap: 4px; flex-wrap: nowrap; }
+.project-window footer { justify-content: space-between; flex-wrap: wrap; border-top: 1px solid var(--line); }
+.project-window footer span { font-size: 12px; color: var(--muted); }
+.project-window-confirm { padding: 12px 16px; border-top: 1px solid var(--line); }
+.project-window-confirm strong { display: block; font-size: 13px; overflow-wrap: anywhere; margin-bottom: 8px; }
+.project-window-confirm input { width: 100%; margin-bottom: 8px; }
+@media (max-width: 640px) {
+  .project-window { left: 12px !important; top: 68px !important; max-height: calc(100dvh - 80px); }
+  .project-window-tools { flex-wrap: wrap; }
+  .project-window td, .project-window th { padding: 8px; }
+}

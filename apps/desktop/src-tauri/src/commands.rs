@@ -1,4 +1,5 @@
 use super::show_main_window;
+use base64::Engine;
 use overleaf_browser::detect_chrome_executable;
 use std::{fs, path::PathBuf, process::Command, thread, time::Duration};
 use tauri::AppHandle;
@@ -29,6 +30,21 @@ pub(super) fn desktop_write_text_file(path: String, text: String) -> Result<(), 
         ));
     }
 
+    write_user_file(path, text.as_bytes())
+}
+
+#[tauri::command]
+pub(super) fn desktop_write_binary_file(path: String, data: String) -> Result<(), String> {
+    if data.len() > 180 * 1024 * 1024 {
+        return Err("file exceeds the download size limit".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|_| "invalid file data".to_string())?;
+    write_user_file(path, &bytes)
+}
+
+fn write_user_file(path: String, bytes: &[u8]) -> Result<(), String> {
     let path = normalize_user_file_path(path)?;
     if let Some(parent) = path.parent() {
         if !parent.exists() {
@@ -42,7 +58,7 @@ pub(super) fn desktop_write_text_file(path: String, text: String) -> Result<(), 
         return Err(format!("path points to a directory: {}", path.display()));
     }
 
-    fs::write(&path, text).map_err(|error| format!("failed to write {}: {error}", path.display()))
+    fs::write(&path, bytes).map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 
 #[tauri::command]

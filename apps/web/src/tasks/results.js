@@ -289,7 +289,6 @@ export function taskItemDetails(item) {
     if (typeof item.report.eligibility === "string") {
       const details = [
         `试用资格：${statusText(item.report.eligibility)}`,
-        item.report.plan_availability ? `计划：${statusText(item.report.plan_availability)}` : "",
         item.report.subscription_label
           ? `订阅：${safeTaskValue(item.report.subscription_label, "subscription_label")}`
           : "",

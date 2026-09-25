@@ -36,6 +36,14 @@ pub struct ProjectMigrationProgressEvent {
 }
 
 pub trait ProjectMigrationControl: Send + Sync {
+    fn selected_project_ids(&self) -> Option<&[String]> {
+        None
+    }
+
+    fn expected_source_alias(&self) -> Option<&str> {
+        None
+    }
+
     fn is_cancel_requested(&self) -> bool {
         false
     }
@@ -287,6 +295,14 @@ pub async fn migrate_projects_with_reqwest_in_store_controlled(
         .filter(|value| !value.is_empty())
         .ok_or(ProjectMigrationError::NoCurrentAccount)?;
     let target_alias = target_alias.trim();
+    if control
+        .expected_source_alias()
+        .is_some_and(|expected| expected != source_alias)
+    {
+        return Err(ProjectMigrationError::Io {
+            message: "当前账号已改变，请重新选择迁移项目".into(),
+        });
+    }
     if source_alias == target_alias {
         return Err(ProjectMigrationError::SourceEqualsTarget {
             alias: target_alias.to_string(),
@@ -368,8 +384,19 @@ where
     T: ProjectApiTransport,
 {
     ensure_migration_not_cancelled(control)?;
-    let source_projects =
+    let mut source_projects =
         list_projects_with_retry(source_client, source_alias, control, 0, 1).await?;
+    if let Some(selected) = control.selected_project_ids() {
+        if selected
+            .iter()
+            .any(|id| !source_projects.iter().any(|p| p.id == *id && p.is_active()))
+        {
+            return Err(ProjectMigrationError::Io {
+                message: "部分所选项目已不在工作区，请重新选择迁移项目".into(),
+            });
+        }
+        source_projects.retain(|project| selected.contains(&project.id));
+    }
     ensure_migration_not_cancelled(control)?;
     let target_projects =
         list_projects_with_retry(target_client, target_alias, control, 0, 1).await?;
@@ -1324,7 +1351,7 @@ fn apply_audit(audit: ProjectMigrationAudit, report: &mut ProjectMigrationReport
     report.missing_projects = audit.missing.iter().map(summary).collect();
 }
 
-async fn reqwest_project_client(
+pub(crate) async fn reqwest_project_client(
     document: &AccountsDocument,
     alias: &str,
     secret_backend: &(dyn SecretBackend + Send + Sync),

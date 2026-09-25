@@ -325,15 +325,14 @@ impl<T: SessionTransport> OverleafSessionClient<T> {
                 plan_availability: TrialPlanAvailability::Unknown,
             });
         };
-        let plan_availability = match self.get(plan_request).await {
-            Ok(response) => parse_trial_plan_availability(
-                response.status,
-                response.effective_url.as_deref(),
-                &response.body,
-                trial_days,
-            ),
-            Err(_) => TrialPlanAvailability::Unknown,
-        };
+        let response = self.get(plan_request).await?;
+        ensure_session_success(response.status, &response.body)?;
+        let plan_availability = parse_trial_plan_availability(
+            response.status,
+            response.effective_url.as_deref(),
+            &response.body,
+            trial_days,
+        );
         Ok(TrialEligibilityStatus {
             eligibility: classify_trial_eligibility(&subscription, plan_availability, now_unix),
             subscription,
@@ -378,7 +377,7 @@ pub fn subscription_page_request() -> SessionPageRequest {
 pub fn trial_plan_page_request(trial_days: u32) -> Option<SessionPageRequest> {
     let plan_code = overleaf_core::registration_trial_plan_code(trial_days)?;
     Some(SessionPageRequest {
-        path: format!("/user/subscription/new?planCode={plan_code}"),
+        path: format!("/user/subscription/new?planCode={plan_code}&currency=USD"),
     })
 }
 
