@@ -64,7 +64,7 @@ import {
 import { setRegistrationStatus, syncRegistrationSource } from "./registration.js";
 import { statusText } from "./format.js";
 
-export async function refresh({ detectBrowser = true, refreshSubscriptions = false } = {}) {
+export async function refresh({ detectBrowser = true, refreshSubscriptions = false, focusTask = true } = {}) {
   if (state.loading) return;
   cancelScheduledAccountStateRefresh();
   state.loading = true;
@@ -130,7 +130,7 @@ export async function refresh({ detectBrowser = true, refreshSubscriptions = fal
     if (refreshSubscriptions) {
       const aliases = state.accounts.filter((account) => account.cookie?.present).map((account) => account.alias).join(",");
       if (aliases) {
-        await postTaskResult(endpoints.refreshSubscriptions, { aliases, task_id: makeTaskId("subscription-refresh", aliases) });
+        await postTaskResult(endpoints.refreshSubscriptions, { aliases, task_id: makeTaskId("subscription-refresh", aliases) }, { focusTask });
         [state.accounts, state.dashboard] = await Promise.all([
           fetchJson(endpoints.accounts), fetchJson(endpoints.dashboard),
         ]);
@@ -763,21 +763,26 @@ export async function syncTaskAfterRequest(taskId, response) {
   }
 }
 
-export async function postJson(path, payload) {
-  const taskId = payload && typeof payload.task_id === "string" ? payload.task_id : "";
+export async function postJson(path, payload, { focusTask = true } = {}) {
+  const taskId = String(payload?.new_task_id || payload?.task_id || "");
+  if (focusTask && taskId) state.runtimeLogFocusTaskId = taskId;
   let data;
   try {
-    data = await request(path, { method: "POST", payload });
-  } catch (error) {
-    if (error.status !== undefined) await syncTaskAfterRequest(taskId, error.payload);
-    throw error;
+    try {
+      data = await request(path, { method: "POST", payload });
+    } catch (error) {
+      if (error.status !== undefined) await syncTaskAfterRequest(taskId, error.payload);
+      throw error;
+    }
+    await syncTaskAfterRequest(taskId, data);
+    return data;
+  } finally {
+    if (focusTask && state.runtimeLogFocusTaskId === taskId) state.runtimeLogFocusTaskId = "";
   }
-  await syncTaskAfterRequest(taskId, data);
-  return data;
 }
 
-export async function postTaskResult(path, payload) {
-  const response = await postJson(path, payload);
+export async function postTaskResult(path, payload, options) {
+  const response = await postJson(path, payload, options);
   if (!isActiveTaskSnapshot(response)) return response;
   return new Promise((resolve, reject) => {
     registerPendingAccountOperation(response.task_id, (task) => {

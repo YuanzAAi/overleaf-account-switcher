@@ -115,6 +115,7 @@ export const state = {
   passwordSelectionTool: "",
   runtimeLogCollapsed: false,
   runtimeLogStickToBottom: true,
+  runtimeLogFocusTaskId: "",
   confirmDialogResolver: null,
   accountDeleteAliases: [],
   clientRuntimeLogs: [],

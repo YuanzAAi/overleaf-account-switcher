@@ -1,6 +1,5 @@
 import { endpoints, state } from "../state.js";
-import { request } from "../http.js";
-import { postTaskResult } from "../sync.js";
+import { postJson, postTaskResult } from "../sync.js";
 import { makeTaskId } from "../tasks/list.js";
 import { escapeHtml, escapeAttr } from "../format.js";
 import { iconSvg } from "../icons.js";
@@ -21,9 +20,9 @@ function projectDate(value) {
 }
 
 async function call(alias, action, fields = {}) {
-  return request(endpoints.projects, { method: "POST", payload: {
+  return postJson(endpoints.projects, {
     alias, action, ...fields, task_id: makeTaskId(`project-${action}`, alias || "current"),
-  } });
+  }, { focusTask: action !== "list" });
 }
 
 function failure(error, status) {
@@ -164,7 +163,7 @@ function projectWorkspace(alias, { target, onSelect } = {}) {
         status.textContent = "正在恢复账号登录状态...";
         await postTaskResult(endpoints.refreshCredentials, {
           aliases: alias, passwords: "", task_id: makeTaskId("refresh-session", alias),
-        });
+        }, { focusTask: false });
         report = await call(alias, "list");
       }
       if (!dialog.open) return;
@@ -226,7 +225,10 @@ function projectWorkspace(alias, { target, onSelect } = {}) {
         if (!dialog.open) break;
         status.textContent = operation === "pdf" ? "正在编译 PDF..." : `正在处理：${item.name}`;
         const report = await call(alias, operation, {project_id:item.id, ...fields});
-        if (report.data && dialog.open) await saveDownload(report);
+        if (report.data) {
+          try { if (dialog.open) await saveDownload(report); }
+          finally { delete report.data; }
+        }
         selected.delete(item.id);
       }
       busy = false;

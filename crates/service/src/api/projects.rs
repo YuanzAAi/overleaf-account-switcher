@@ -182,6 +182,88 @@ fn api_error(cause: ProjectApiError) -> ApiResponse {
     }
 }
 
+fn compile_output_url(
+    compiled: &serde_json::Value,
+    filename: &str,
+) -> Result<Option<String>, ApiResponse> {
+    let Some(path) = compiled["outputFiles"]
+        .as_array()
+        .and_then(|files| files.iter().find(|file| file["path"] == filename))
+        .and_then(|file| file["url"].as_str())
+    else {
+        return Ok(None);
+    };
+    let mut url = reqwest::Url::parse("https://www.overleaf.com")
+        .unwrap()
+        .join(path)
+        .map_err(|_| error(502, "编译返回的下载地址无效"))?;
+    if !url.query_pairs().any(|(key, _)| key == "clsiserverid") {
+        if let Some(server) = compiled["clsiServerId"].as_str() {
+            url.query_pairs_mut().append_pair("clsiserverid", server);
+        }
+    }
+    Ok(Some(url.to_string()))
+}
+
+async fn record_compile_diagnostics(
+    client: &ProjectApiClient<ReqwestProjectApiTransport>,
+    compiled: &serde_json::Value,
+    has_pdf: bool,
+    shared: &Arc<StdMutex<ApiState>>,
+    task_id: &str,
+) -> String {
+    let status = compiled["status"].as_str().unwrap_or("unknown");
+    let message = if has_pdf {
+        "编译未完全成功，下载的是本次已生成的 PDF；请检查编译日志"
+    } else {
+        match status {
+            "timedout" => "编译超时，未生成 PDF；请检查项目规模或账号的编译时限",
+            "failure" => "编译失败，未生成 PDF；请根据编译日志修正错误",
+            "compile-in-progress" => "项目正在编译，请等待完成后重新下载 PDF",
+            "terminated" => "编译已中止，未生成 PDF；请重新编译",
+            _ => "本次编译未生成 PDF，请查看编译状态与错误日志",
+        }
+    };
+    let log = |text: String| {
+        if let Ok(mut state) = shared.lock() {
+            let _ = state.tasks.append_log(task_id, TaskLogLevel::Warning, text);
+        }
+    };
+    log(message.into());
+    log(format!(
+        "Overleaf 编译响应：{}",
+        json!({
+            "status": compiled["status"], "error": compiled["error"], "message": compiled["message"],
+        })
+    ));
+    if let Ok(Some(url)) = compile_output_url(compiled, "output.log") {
+        match client.clone().into_inner().download(&url).await {
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes);
+                let lines: Vec<_> = text.lines().collect();
+                let details = lines
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, line)| {
+                        line.starts_with('!') || line.to_ascii_lowercase().contains("error:")
+                    })
+                    .take(3)
+                    .flat_map(|(index, _)| lines[index..].iter().take(4).copied())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !details.is_empty() {
+                    log(format!(
+                        "LaTeX 原始错误：\n{}",
+                        details.chars().take(2000).collect::<String>()
+                    ));
+                }
+            }
+            Err(cause) => log(format!("未能读取编译日志：{cause}")),
+        }
+    }
+    message.into()
+}
+
 async fn operate(
     client: &ProjectApiClient<ReqwestProjectApiTransport>,
     request: &Request,
@@ -247,21 +329,21 @@ async fn operate(
             let pdf = matches!(request.action, Action::Pdf);
             let path = if pdf {
                 let compiled = client.compile_project(id).await.map_err(api_error)?;
-                let url = compiled["outputFiles"]
-                    .as_array()
-                    .and_then(|files| files.iter().find(|file| file["path"] == "output.pdf"))
-                    .and_then(|file| file["url"].as_str())
-                    .ok_or_else(|| error(409, "编译未生成 PDF，请检查项目源码"))?;
-                let mut url = reqwest::Url::parse("https://www.overleaf.com")
-                    .unwrap()
-                    .join(url)
-                    .map_err(|_| error(502, "编译返回的下载地址无效"))?;
-                if !url.query_pairs().any(|(key, _)| key == "clsiserverid") {
-                    if let Some(server) = compiled["clsiServerId"].as_str() {
-                        url.query_pairs_mut().append_pair("clsiserverid", server);
+                let url = compile_output_url(&compiled, "output.pdf")?;
+                if url.is_none() || compiled["status"] != "success" {
+                    let message = record_compile_diagnostics(
+                        client,
+                        &compiled,
+                        url.is_some(),
+                        shared,
+                        &request.task_id,
+                    )
+                    .await;
+                    if url.is_none() {
+                        return Err(error(409, message));
                     }
                 }
-                url.to_string()
+                url.unwrap()
             } else {
                 format!("/project/{id}/download/zip")
             };

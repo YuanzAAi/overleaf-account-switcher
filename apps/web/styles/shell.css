@@ -725,6 +725,7 @@ body.sidebar-collapsed {
 .runtime-message {
   min-width: 0;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 .runtime-line-primary {
   grid-template-columns: 64px 76px minmax(0, 1fr) auto;

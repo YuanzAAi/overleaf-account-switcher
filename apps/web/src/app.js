@@ -298,6 +298,6 @@ document.addEventListener("DOMContentLoaded", () => {
   restoreSelectedProfile();
   renderTopProfile(null);
   renderRuntimeArtifacts(null);
-  refresh({ refreshSubscriptions: true });
+  refresh({ refreshSubscriptions: true, focusTask: false });
   startServiceHealthMonitor();
 });

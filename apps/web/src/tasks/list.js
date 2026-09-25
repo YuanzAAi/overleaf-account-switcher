@@ -161,7 +161,17 @@ export function renderTasks(tasks) {
       }
     });
   }
-  scrollRuntimeLogToLatest(list);
+  const focusId = state.runtimeLogFocusTaskId;
+  const focusBlock = focusId && list.querySelector(`[data-task-id="${CSS.escape(focusId)}"]`);
+  if (focusBlock) {
+    state.runtimeLogFocusTaskId = "";
+    state.runtimeLogStickToBottom = false;
+    applyRuntimeLogCollapsed(false);
+    list.scrollTop += focusBlock.getBoundingClientRect().bottom - list.getBoundingClientRect().bottom;
+    state.runtimeLogStickToBottom = runtimeLogIsNearBottom(list);
+  } else {
+    scrollRuntimeLogToLatest(list);
+  }
 }
 
 export function focusLatestRetryableTask() {
@@ -1067,6 +1077,7 @@ export async function retryTask(button) {
   try {
     await postJson(endpoints.taskRetry, {
       task_id: taskId,
+      new_task_id: makeTaskId("retry", taskId),
       confirm_replay: Boolean(requiresConfirmation),
     });
     await refresh();
