@@ -19,10 +19,10 @@ function projectDate(value) {
   return value && Number.isFinite(date.getTime()) ? date.toLocaleString() : "";
 }
 
-async function call(alias, action, fields = {}) {
+async function call(alias, action, fields = {}, focusTask = action !== "list") {
   return postJson(endpoints.projects, {
     alias, action, ...fields, task_id: makeTaskId(`project-${action}`, alias || "current"),
-  }, { focusTask: action !== "list" });
+  }, { focusTask });
 }
 
 function failure(error, status) {
@@ -224,7 +224,7 @@ function projectWorkspace(alias, { target, onSelect } = {}) {
       for (const item of targets) {
         if (!dialog.open) break;
         status.textContent = operation === "pdf" ? "正在编译 PDF..." : `正在处理：${item.name}`;
-        const report = await call(alias, operation, {project_id:item.id, ...fields});
+        const report = await call(alias, operation, {project_id:item.id, ...fields}, item === targets[0]);
         if (report.data) {
           try { if (dialog.open) await saveDownload(report); }
           finally { delete report.data; }
