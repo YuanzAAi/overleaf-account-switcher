@@ -208,7 +208,7 @@ export async function submitAccountDeleteModal() {
           cleanup_remote_projects: true,
           confirm_local_only: true,
           task_id: makeTaskId("clean-remove", cleanupAliases.join(",")),
-        }),
+        }, { focusTask: localOnlyAliases.length === 0 }),
       );
     }
     const removed = reports.reduce((sum, report) => sum + Number(report.removed_count || 0), 0);

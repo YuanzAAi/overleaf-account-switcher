@@ -57,6 +57,7 @@ export async function importAccounts(event) {
   state.importFiles.forEach((file) => { if (file.status !== "done") file.status = "queued"; });
   state.importingFiles = true;
   submit.disabled = true;
+  let firstTask = true;
   try {
     // 每个文件连同后置任务完成后再处理下一个，避免账号库并发写入。
     for (let file; (file = state.importFiles.find((item) => item.status === "queued"));) {
@@ -68,7 +69,9 @@ export async function importAccounts(event) {
         if (new Blob([JSON.stringify({ ...payload, ...options, task_id: taskId })]).size > 2 * 1024 * 1024) {
           throw new Error("文件超过服务的 2 MB 请求上限，请拆分后导入");
         }
-        let report = await postJson(endpoints.importAccounts, { ...payload, ...options, task_id: taskId });
+        const focusTask = firstTask;
+        firstTask = false;
+        let report = await postJson(endpoints.importAccounts, { ...payload, ...options, task_id: taskId }, { focusTask });
         let phase = "completed";
         if (isActiveTaskSnapshot(report)) {
           const task = await new Promise((resolve) => {
