@@ -21,7 +21,7 @@ use overleaf_browser::{
     discover_chrome_profiles_from_environment, focus_browser_process_window,
     is_owned_temp_profile_name, BrowserAutoLoginInput, BrowserAutomation, BrowserAutomationError,
     BrowserAutomationResult, CdpLoginState, CdpRegistrationState, CdpTrialPurchaseAvailability,
-    ChromeProxyAttempt, ChromeProxyMode, ChromeProxyPolicy, CredentialsLoginInput,
+    ChromeProxyAttempt, ChromeProxyMode, ChromeProxyPolicy, CookieCapture, CredentialsLoginInput,
     ExtensionBridgeWebSocketServer, ExtensionCommand, ExtensionResponse,
     LocalChromeAutomationConfig, LocalChromeBrowserAutomation, LocalChromeCdpSession, LoginResult,
     RegistrationInput, RegistrationResult, SecretText, StripeAddressInput, StripePaymentInput,
@@ -89,6 +89,8 @@ use crate::account_browser::{
     open_account_browser_logins_in_store_with_recovery_backend,
 };
 use crate::account_credentials::credential_report_failure_message;
+use crate::account_git_token::apply_git_token_page_state_in_store_with_backend;
+use crate::account_password_change::save_confirmed_password_change_in_store_with_backend;
 use crate::account_registration::validate_registration_input;
 use crate::{
     account_secret_for_copy_with_backend, add_account_from_login_result_in_store_with_backend,
@@ -221,10 +223,12 @@ pub struct ApiState {
     pub browser_automation: Option<Arc<dyn BrowserAutomation + Send + Sync>>,
     pub local_chrome_browser: Option<Arc<LocalChromeBrowserAutomation>>,
     registration_sessions: Arc<StdMutex<BTreeMap<String, RegistrationSessionEntry>>>,
-    registration_slot_owner: Arc<StdMutex<Option<String>>>,
+    registration_slot_owners: Arc<StdMutex<BTreeMap<String, String>>>,
+    registration_card_reservations: Arc<StdMutex<BTreeMap<String, String>>>,
     account_browser_sessions: Arc<StdMutex<BTreeMap<String, AccountBrowserSessionEntry>>>,
     browser_batch_coordinator: BrowserBatchCoordinator,
     background_jobs: Arc<StdMutex<VecDeque<ApiBackgroundJob>>>,
+    background_task_snapshots: Arc<StdMutex<VecDeque<TaskSnapshot>>>,
     account_commit_lock: Arc<StdMutex<()>>,
     prefetched_registration_address: Arc<StdMutex<Option<RegistrationAddressSelection>>>,
     pub extension_bridge_executor: Option<Arc<dyn AccountSwitchCommandExecutor + Send + Sync>>,
@@ -376,6 +380,7 @@ struct RegistrationSessionContext {
     auto_fetch_git_token: bool,
     card_selection_strategy: CardSelectionStrategy,
     card_bin: Option<String>,
+    one_card_per_account: bool,
 }
 
 impl ApiState {
@@ -393,10 +398,12 @@ impl ApiState {
             browser_automation,
             local_chrome_browser,
             registration_sessions: Arc::new(StdMutex::new(BTreeMap::new())),
-            registration_slot_owner: Arc::new(StdMutex::new(None)),
+            registration_slot_owners: Arc::new(StdMutex::new(BTreeMap::new())),
+            registration_card_reservations: Arc::new(StdMutex::new(BTreeMap::new())),
             account_browser_sessions: Arc::new(StdMutex::new(BTreeMap::new())),
             browser_batch_coordinator: BrowserBatchCoordinator::default(),
             background_jobs: Arc::new(StdMutex::new(VecDeque::new())),
+            background_task_snapshots: Arc::new(StdMutex::new(VecDeque::new())),
             account_commit_lock: Arc::new(StdMutex::new(())),
             prefetched_registration_address: Arc::new(StdMutex::new(None)),
             extension_bridge_executor: default_extension_bridge_executor(),
@@ -481,6 +488,29 @@ impl ApiState {
             .lock()
             .map(|mut jobs| jobs.drain(..).collect())
             .unwrap_or_default()
+    }
+
+    fn background_worker_clone(&self) -> Self {
+        let mut worker = self.clone();
+        worker
+            .tasks
+            .mirror_updates_to(Arc::clone(&self.background_task_snapshots));
+        worker
+    }
+
+    fn apply_background_task_snapshots(&mut self) {
+        let snapshots = self
+            .background_task_snapshots
+            .lock()
+            .map(|mut snapshots| snapshots.drain(..).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let mut latest = BTreeMap::new();
+        for snapshot in snapshots {
+            latest.insert(snapshot.task_id.clone(), snapshot);
+        }
+        for snapshot in latest.into_values() {
+            self.tasks.apply_mirrored_snapshot(snapshot);
+        }
     }
 
     pub fn account_commit_lock(&self) -> Arc<StdMutex<()>> {
@@ -569,9 +599,9 @@ impl fmt::Debug for ApiState {
             .field(
                 "registration_slot_active",
                 &self
-                    .registration_slot_owner
+                    .registration_slot_owners
                     .lock()
-                    .map(|owner| owner.is_some())
+                    .map(|owners| !owners.is_empty())
                     .unwrap_or(false),
             )
             .field(
@@ -670,6 +700,14 @@ struct RegistrationStartRequest {
     card_selection_strategy: CardSelectionStrategy,
     #[serde(default)]
     card_bin: String,
+    #[serde(default)]
+    one_card_per_account: bool,
+    #[serde(default)]
+    registration_batch_id: Option<String>,
+    #[serde(default)]
+    registration_batch_size: usize,
+    #[serde(default)]
+    registration_batch_index: usize,
     #[serde(default)]
     task_id: Option<String>,
 }
@@ -2584,36 +2622,99 @@ fn task_input_response(state: &mut ApiState, body: &str, now_unix: i64) -> ApiRe
         return account_browser_session_missing_response(task_id);
     }
 
+    let registration_continuation = matches!(
+        kind,
+        TaskUserInputKind::EmailCode | TaskUserInputKind::NewRegistrationCredentials
+    ) || (kind == TaskUserInputKind::CaptchaCompleted
+        && has_registration_session(state, task_id));
+
     match state.tasks.submit_user_input(task_id, kind, request.value) {
         Ok(snapshot) => match kind {
-            TaskUserInputKind::EmailCode => {
-                continue_registration_with_email_code_response(state, task_id, &value, now_unix)
-                    .unwrap_or_else(|| json_response(200, &snapshot))
-            }
-            TaskUserInputKind::NewRegistrationCredentials => {
-                continue_registration_with_new_credentials_response(
-                    state, task_id, &value, now_unix,
+            TaskUserInputKind::EmailCode | TaskUserInputKind::NewRegistrationCredentials
+                if registration_continuation =>
+            {
+                enqueue_registration_task_continuation(
+                    state, task_id, kind, value, now_unix, snapshot,
                 )
-                .unwrap_or_else(|| registration_session_missing_response(task_id))
             }
             TaskUserInputKind::NewBrowserCredentials => {
                 continue_account_browser_with_new_credentials_response(state, task_id, &value)
                     .unwrap_or_else(|| account_browser_session_missing_response(task_id))
             }
+            TaskUserInputKind::CaptchaCompleted if registration_continuation => {
+                enqueue_registration_task_continuation(
+                    state, task_id, kind, value, now_unix, snapshot,
+                )
+            }
             TaskUserInputKind::CaptchaCompleted => {
-                continue_registration_after_captcha_response(state, task_id, now_unix)
-                    .or_else(|| continue_account_browser_after_captcha_response(state, task_id))
+                continue_account_browser_after_captcha_response(state, task_id)
                     .unwrap_or_else(|| registration_session_missing_response(task_id))
+            }
+            TaskUserInputKind::EmailCode | TaskUserInputKind::NewRegistrationCredentials => {
+                registration_session_missing_response(task_id)
             }
         },
         Err(error) => task_state_error_response(error),
     }
 }
 
+fn enqueue_registration_task_continuation(
+    state: &mut ApiState,
+    task_id: &str,
+    kind: TaskUserInputKind,
+    value: String,
+    now_unix: i64,
+    snapshot: TaskSnapshot,
+) -> ApiResponse {
+    state.tasks.discard_user_inputs(task_id, kind);
+    let owned_task_id = task_id.to_string();
+    let job = ApiBackgroundJob::new("account-registration-input", move |shared_state| {
+        let Ok(mut worker_state) = shared_state
+            .lock()
+            .map(|state| state.background_worker_clone())
+        else {
+            return;
+        };
+        match kind {
+            TaskUserInputKind::EmailCode => {
+                let _ = continue_registration_with_email_code_response(
+                    &mut worker_state,
+                    &owned_task_id,
+                    &value,
+                    now_unix,
+                );
+            }
+            TaskUserInputKind::NewRegistrationCredentials => {
+                let _ = continue_registration_with_new_credentials_response(
+                    &mut worker_state,
+                    &owned_task_id,
+                    &value,
+                    now_unix,
+                );
+            }
+            TaskUserInputKind::CaptchaCompleted => {
+                let _ = continue_registration_after_captcha_response(
+                    &mut worker_state,
+                    &owned_task_id,
+                    now_unix,
+                );
+            }
+            TaskUserInputKind::NewBrowserCredentials => {}
+        }
+    });
+    if let Err(response) = state.enqueue_background_job(job) {
+        fail_tracked_task(state, Some(task_id), response.body.clone());
+        return response;
+    }
+    json_response(202, &snapshot)
+}
+
 fn registration_session_required(kind: TaskUserInputKind) -> bool {
     matches!(
         kind,
-        TaskUserInputKind::NewRegistrationCredentials | TaskUserInputKind::CaptchaCompleted
+        TaskUserInputKind::EmailCode
+            | TaskUserInputKind::NewRegistrationCredentials
+            | TaskUserInputKind::CaptchaCompleted
     )
 }
 
@@ -3262,6 +3363,7 @@ fn continue_account_browser_session_from_login_result(
                 auto_fetch_git_token,
                 card_selection_strategy,
                 card_bin,
+                one_card_per_account: false,
             },
             last_activity: Instant::now(),
         },
@@ -4646,6 +4748,7 @@ fn reconcile_account_browser_sessions(state: &mut ApiState) {
 }
 
 pub fn reconcile_browser_sessions(state: &mut ApiState, now_unix: i64) {
+    state.apply_background_task_snapshots();
     reconcile_account_browser_sessions(state);
     reconcile_registration_sessions(state, now_unix);
 }
@@ -4763,13 +4866,27 @@ fn reconcile_registration_sessions(state: &mut ApiState, now_unix: i64) {
                 let _ = state
                     .tasks
                     .append_log(&task_id, TaskLogLevel::Info, message);
-                let _ = continue_registration_from_state_response(
-                    state,
-                    &task_id,
-                    entry,
-                    registration_state,
-                    now_unix,
-                );
+                let owned_task_id = task_id.clone();
+                let job =
+                    ApiBackgroundJob::new("account-registration-resume", move |shared_state| {
+                        let Ok(mut worker_state) = shared_state
+                            .lock()
+                            .map(|state| state.background_worker_clone())
+                        else {
+                            cleanup_registration_session(entry);
+                            return;
+                        };
+                        let _ = continue_registration_from_state_response(
+                            &mut worker_state,
+                            &owned_task_id,
+                            entry,
+                            registration_state,
+                            now_unix,
+                        );
+                    });
+                if let Err(response) = state.enqueue_background_job(job) {
+                    fail_tracked_task(state, Some(&task_id), response.body);
+                }
             }
             Err(error) => {
                 cleanup_registration_session(entry);

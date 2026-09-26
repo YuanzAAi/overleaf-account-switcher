@@ -943,7 +943,16 @@ impl CredentialBrowserBatchJob {
                 );
             }
 
-            let leases = match self.coordinator.claim_available_for(&self.task_id) {
+            let accumulator = self
+                .accumulator
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if accumulator.finalized {
+                break;
+            }
+            let leases = self.coordinator.claim_available_for(&self.task_id);
+            drop(accumulator);
+            let leases = match leases {
                 Ok(leases) => leases,
                 Err(error) => {
                     self.finish_scheduler_error(&shared_state, error);
@@ -1007,6 +1016,10 @@ impl CredentialBrowserBatchJob {
                 }
             }
 
+            if self.batch_finalized() {
+                break;
+            }
+
             match self.coordinator.snapshot(&self.task_id) {
                 Ok(snapshot) if snapshot.is_terminal() => {
                     finish_credential_browser_batch_if_terminal(
@@ -1020,7 +1033,9 @@ impl CredentialBrowserBatchJob {
                 }
                 Ok(_) => std::thread::sleep(Duration::from_millis(50)),
                 Err(error) => {
-                    self.finish_scheduler_error(&shared_state, error);
+                    if !self.batch_finalized() {
+                        self.finish_scheduler_error(&shared_state, error);
+                    }
                     break;
                 }
             }
@@ -1029,6 +1044,10 @@ impl CredentialBrowserBatchJob {
         for (_, handle) in handles {
             let _ = handle.join();
         }
+    }
+
+    fn batch_finalized(&self) -> bool {
+        self.accumulator.lock().is_ok_and(|batch| batch.finalized)
     }
 
     fn finish_scheduler_error(
@@ -1097,6 +1116,257 @@ impl CredentialBrowserBatchJob {
 }
 
 impl CredentialBrowserItemJob {
+    fn save_login(
+        &self,
+        runtime: &tokio::runtime::Runtime,
+        login: LoginResult,
+    ) -> Result<CredentialLoginReport, String> {
+        match &self.plan {
+            CredentialBrowserPlan::Add(plan) => {
+                runtime.block_on(add_account_from_login_result_in_store_with_backend(
+                    &self.store,
+                    plan.alias_hint.as_deref(),
+                    &plan.email,
+                    SecretText::new(plan.password.clone()),
+                    login,
+                    self.metadata_refresher.as_ref(),
+                    self.now_unix,
+                    self.secret_backend.as_ref(),
+                ))
+            }
+            _ => runtime.block_on(
+                refresh_account_cookie_from_login_result_in_store_with_backend(
+                    &self.store,
+                    self.plan.alias(),
+                    SecretText::new(self.plan.password().to_string()),
+                    login,
+                    self.metadata_refresher.as_ref(),
+                    self.now_unix,
+                    self.secret_backend.as_ref(),
+                ),
+            ),
+        }
+        .map_err(|error| account_credential_error_message(&error))
+    }
+
+    fn try_protocol_git_token(
+        &self,
+        shared_state: &Arc<StdMutex<ApiState>>,
+        runtime: &tokio::runtime::Runtime,
+        transport: &ReqwestSessionTransport,
+        login: Option<LoginResult>,
+    ) -> Option<Result<CredentialBrowserCommitReport, String>> {
+        let state = if matches!(self.plan, CredentialBrowserPlan::GitTokenRefresh(_)) {
+            self.log_stage(
+                shared_state,
+                TaskLogLevel::Info,
+                "阶段：协议读取 Git token 状态",
+            );
+            runtime.block_on(transport.fetch_git_token_state()).ok()?
+        } else {
+            self.log_stage(shared_state, TaskLogLevel::Info, "阶段：协议生成 Git token");
+            let (token, expiry) = match runtime.block_on(transport.create_git_token()) {
+                Ok(Some(value)) => value,
+                Ok(None) => return None,
+                Err(error) => return Some(Err(format!("协议生成 Git token 结果未确认: {error}"))),
+            };
+            overleaf_api::GitTokenPageState {
+                visible_token: Some(token),
+                expiry,
+                has_existing_masked_token: false,
+                can_generate_token: false,
+                can_add_another_token: false,
+            }
+        };
+        let _guard = match self.commit_lock.lock() {
+            Ok(guard) => guard,
+            Err(_) => return Some(Err("account commit lock poisoned".to_string())),
+        };
+        if let Some(login) = login {
+            if let Err(error) = self.save_login(runtime, login) {
+                return Some(Err(error));
+            }
+        }
+        Some(
+            apply_git_token_page_state_in_store_with_backend(
+                &self.store,
+                self.plan.alias(),
+                &state,
+                self.secret_backend.as_ref(),
+            )
+            .map(CredentialBrowserCommitReport::GitToken)
+            .map_err(|error| account_git_token_error_message(&error)),
+        )
+    }
+
+    fn try_protocol_password_change(
+        &self,
+        shared_state: &Arc<StdMutex<ApiState>>,
+        runtime: &tokio::runtime::Runtime,
+        transport: &ReqwestSessionTransport,
+        login: Option<LoginResult>,
+    ) -> Option<Result<CredentialBrowserCommitReport, String>> {
+        let CredentialBrowserPlan::PasswordChange(plan) = &self.plan else {
+            return None;
+        };
+        self.log_stage(shared_state, TaskLogLevel::Info, "阶段：协议改密");
+        match runtime
+            .block_on(transport.change_password(&plan.current_password, &plan.new_password))
+        {
+            Ok(true) => {}
+            Ok(false) => return None,
+            Err(error) => return Some(Err(format!("协议改密结果未确认: {error}"))),
+        }
+        let _guard = match self.commit_lock.lock() {
+            Ok(guard) => guard,
+            Err(_) => return Some(Err("account commit lock poisoned".to_string())),
+        };
+        Some(
+            save_confirmed_password_change_in_store_with_backend(
+                &self.store,
+                &plan.alias,
+                SecretText::new(plan.new_password.clone()),
+                login,
+                self.now_unix,
+                self.secret_backend.as_ref(),
+            )
+            .map(CredentialBrowserCommitReport::PasswordChange)
+            .map_err(|error| overleaf_password_change_error_message(&error)),
+        )
+    }
+
+    fn try_protocol_login(
+        &self,
+        shared_state: &Arc<StdMutex<ApiState>>,
+        runtime: &tokio::runtime::Runtime,
+    ) -> Option<(ReqwestSessionTransport, LoginResult)> {
+        let email = self.plan.email()?.trim();
+        let password = self.plan.password();
+        if email.is_empty() || password.trim().is_empty() {
+            return None;
+        }
+        self.log_stage(shared_state, TaskLogLevel::Info, "阶段：协议登录");
+        let (transport, user) = match runtime.block_on(
+            ReqwestSessionTransport::try_login_with_credentials(email, password),
+        ) {
+            Ok(Some(login)) => login,
+            Ok(None) => {
+                self.log_stage(
+                    shared_state,
+                    TaskLogLevel::Warning,
+                    "阶段：协议登录未建立会话，切换浏览器",
+                );
+                return None;
+            }
+            Err(error) => {
+                self.log_stage(
+                    shared_state,
+                    TaskLogLevel::Warning,
+                    format!("阶段：协议登录未完成（{error}），切换浏览器"),
+                );
+                return None;
+            }
+        };
+        if browser_task_cancel_requested(shared_state, &self.task_id) {
+            return None;
+        }
+        let login = LoginResult {
+            email: user.email,
+            user_id: user.user_id,
+            cookies: transport
+                .cookies()
+                .iter()
+                .map(|(name, value)| CookieCapture {
+                    name: name.clone(),
+                    value: SecretText::new(value.clone()),
+                    expiration_date: (name == overleaf_api::OVERLEAF_SESSION_COOKIE)
+                        .then(|| transport.session_expiry())
+                        .flatten(),
+                })
+                .collect(),
+            trial_expiry: None,
+            subscription_status: None,
+            subscription_label: None,
+        };
+        Some((transport, login))
+    }
+
+    fn try_protocol_shortcut(
+        &self,
+        shared_state: &Arc<StdMutex<ApiState>>,
+    ) -> Option<Result<CredentialBrowserCommitReport, String>> {
+        let runtime = build_api_runtime().ok()?;
+        if matches!(
+            self.plan,
+            CredentialBrowserPlan::GitTokenRefresh(_)
+                | CredentialBrowserPlan::GitToken(_)
+                | CredentialBrowserPlan::PasswordChange(_)
+        ) {
+            let document = self.store.load().ok()?;
+            let record = document.accounts.get(self.plan.alias())?;
+            if let Ok(cookies) = resolve_account_cookies_for_recovery(
+                record,
+                self.plan.alias(),
+                self.secret_backend.as_ref(),
+            ) {
+                let transport = ReqwestSessionTransport::new(cookies);
+                let client = OverleafSessionClient::new(transport.clone());
+                let identity = runtime.block_on(client.fetch_user_info()).ok();
+                let expected = self.plan.email().map(str::trim);
+                if browser_task_cancel_requested(shared_state, &self.task_id) {
+                    return None;
+                }
+                if identity
+                    .as_ref()
+                    .and_then(|info| info.email.as_deref())
+                    .zip(expected)
+                    .is_some_and(|(actual, expected)| actual.eq_ignore_ascii_case(expected))
+                {
+                    if matches!(self.plan, CredentialBrowserPlan::PasswordChange(_)) {
+                        return self.try_protocol_password_change(
+                            shared_state,
+                            &runtime,
+                            &transport,
+                            None,
+                        );
+                    }
+                    return self.try_protocol_git_token(shared_state, &runtime, &transport, None);
+                }
+            }
+        }
+
+        if !matches!(
+            self.plan,
+            CredentialBrowserPlan::Add(_)
+                | CredentialBrowserPlan::Refresh(_)
+                | CredentialBrowserPlan::GitTokenRefresh(_)
+                | CredentialBrowserPlan::GitToken(_)
+                | CredentialBrowserPlan::PasswordChange(_)
+        ) {
+            return None;
+        }
+        let (transport, login) = self.try_protocol_login(shared_state, &runtime)?;
+        match &self.plan {
+            CredentialBrowserPlan::Add(_) | CredentialBrowserPlan::Refresh(_) => {
+                let _guard = match self.commit_lock.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => return Some(Err("account commit lock poisoned".to_string())),
+                };
+                Some(
+                    self.save_login(&runtime, login)
+                        .map(CredentialBrowserCommitReport::Credential),
+                )
+            }
+            CredentialBrowserPlan::GitTokenRefresh(_) | CredentialBrowserPlan::GitToken(_) => {
+                self.try_protocol_git_token(shared_state, &runtime, &transport, Some(login))
+            }
+            CredentialBrowserPlan::PasswordChange(_) => {
+                self.try_protocol_password_change(shared_state, &runtime, &transport, Some(login))
+            }
+            _ => unreachable!(),
+        }
+    }
+
     fn commit(
         &self,
         runtime: &tokio::runtime::Runtime,
@@ -1109,51 +1379,15 @@ impl CredentialBrowserItemJob {
                 | CredentialBrowserPlan::GitToken(_)
                 | CredentialBrowserPlan::BrowserLogin(_)
         ) {
-            let report = runtime
-                .block_on(
-                    refresh_account_cookie_from_login_result_in_store_with_backend(
-                        &self.store,
-                        self.plan.alias(),
-                        SecretText::new(self.plan.password().to_string()),
-                        login.clone(),
-                        self.metadata_refresher.as_ref(),
-                        self.now_unix,
-                        self.secret_backend.as_ref(),
-                    ),
-                )
-                .map_err(|error| account_credential_error_message(&error))?;
+            let report = self.save_login(runtime, login.clone())?;
             if let Some(error) = credential_report_failure_message(&report) {
                 return Err(error);
             }
         }
         match &self.plan {
-            CredentialBrowserPlan::Add(plan) => runtime
-                .block_on(add_account_from_login_result_in_store_with_backend(
-                    &self.store,
-                    plan.alias_hint.as_deref(),
-                    &plan.email,
-                    SecretText::new(plan.password.clone()),
-                    login,
-                    self.metadata_refresher.as_ref(),
-                    self.now_unix,
-                    self.secret_backend.as_ref(),
-                ))
-                .map(CredentialBrowserCommitReport::Credential)
-                .map_err(|error| account_credential_error_message(&error)),
-            CredentialBrowserPlan::Refresh(plan) => runtime
-                .block_on(
-                    refresh_account_cookie_from_login_result_in_store_with_backend(
-                        &self.store,
-                        &plan.alias,
-                        SecretText::new(plan.password.clone()),
-                        login,
-                        self.metadata_refresher.as_ref(),
-                        self.now_unix,
-                        self.secret_backend.as_ref(),
-                    ),
-                )
-                .map(CredentialBrowserCommitReport::Credential)
-                .map_err(|error| account_credential_error_message(&error)),
+            CredentialBrowserPlan::Add(_) | CredentialBrowserPlan::Refresh(_) => self
+                .save_login(runtime, login)
+                .map(CredentialBrowserCommitReport::Credential),
             CredentialBrowserPlan::PasswordChange(plan) => runtime
                 .block_on(
                     change_account_overleaf_password_from_login_result_in_store_with_backend(
@@ -1271,6 +1505,10 @@ impl CredentialBrowserItemJob {
 
     fn run(mut self, shared_state: Arc<StdMutex<ApiState>>) {
         self.log_stage(&shared_state, TaskLogLevel::Info, "阶段：开始处理");
+        if browser_task_cancel_requested(&shared_state, &self.task_id) {
+            self.finish_cancelled(&shared_state, "用户取消");
+            return;
+        }
         if let Some(message) = self.plan.startup_error().map(ToOwned::to_owned) {
             self.log_stage(&shared_state, TaskLogLevel::Warning, "阶段：启动校验失败");
             self.finish_failed(&shared_state, message);
@@ -1293,6 +1531,19 @@ impl CredentialBrowserItemJob {
                     return;
                 }
             }
+        }
+
+        let protocol_result = self.try_protocol_shortcut(&shared_state);
+        if let Some(result) = protocol_result {
+            match result {
+                Ok(report) => self.finish_completed(&shared_state, report),
+                Err(error) => self.finish_failed(&shared_state, error),
+            }
+            return;
+        }
+        if browser_task_cancel_requested(&shared_state, &self.task_id) {
+            self.finish_cancelled(&shared_state, "用户取消");
+            return;
         }
 
         match self.try_browser_login_with_saved_cookie(&shared_state) {

@@ -311,6 +311,9 @@ pub struct TaskStateStore {
     account_locks: BTreeMap<String, String>,
     user_inputs: BTreeMap<String, VecDeque<TaskUserInput>>,
     snapshot_feed: TaskSnapshotFeed,
+    mirror_queue: Option<Arc<Mutex<VecDeque<TaskSnapshot>>>>,
+    mirrored_sequences: Mutex<BTreeMap<String, u64>>,
+    cancel_requests: Arc<Mutex<BTreeSet<String>>>,
 }
 
 impl Clone for TaskStateStore {
@@ -322,6 +325,9 @@ impl Clone for TaskStateStore {
             account_locks: self.account_locks.clone(),
             user_inputs: self.user_inputs.clone(),
             snapshot_feed: TaskSnapshotFeed::default(),
+            mirror_queue: None,
+            mirrored_sequences: Mutex::new(BTreeMap::new()),
+            cancel_requests: Arc::clone(&self.cancel_requests),
         };
         cloned.publish_snapshots();
         cloned
@@ -363,7 +369,47 @@ impl TaskStateStore {
             account_locks: BTreeMap::new(),
             user_inputs: BTreeMap::new(),
             snapshot_feed: TaskSnapshotFeed::default(),
+            mirror_queue: None,
+            mirrored_sequences: Mutex::new(BTreeMap::new()),
+            cancel_requests: Arc::new(Mutex::new(BTreeSet::new())),
         }
+    }
+
+    pub(crate) fn mirror_updates_to(&mut self, mirror_queue: Arc<Mutex<VecDeque<TaskSnapshot>>>) {
+        self.mirror_queue = Some(mirror_queue);
+        self.mirrored_sequences = Mutex::new(
+            self.tasks
+                .iter()
+                .map(|(task_id, snapshot)| (task_id.clone(), snapshot.last_sequence))
+                .collect(),
+        );
+    }
+
+    pub(crate) fn cancellation_requested(&self, task_id: impl AsRef<str>) -> bool {
+        self.cancel_requests
+            .lock()
+            .map(|requests| requests.contains(task_id.as_ref()))
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn apply_mirrored_snapshot(&mut self, mut snapshot: TaskSnapshot) {
+        let task_id = snapshot.task_id.clone();
+        let Some(current) = self.tasks.get(&task_id) else {
+            return;
+        };
+        if current.phase.is_terminal() {
+            return;
+        }
+        snapshot.cancel_requested |= current.cancel_requested;
+        snapshot.last_sequence = self.next_task_sequence();
+        refresh_available_actions(&mut snapshot);
+        let terminal = snapshot.phase.is_terminal();
+        self.tasks.insert(task_id.clone(), snapshot);
+        if terminal {
+            self.release_locks_for_task(&task_id);
+            self.user_inputs.remove(&task_id);
+        }
+        self.publish_snapshots();
     }
 
     pub fn snapshot_feed(&self) -> TaskSnapshotFeed {
@@ -484,6 +530,9 @@ impl TaskStateStore {
         for alias in &locked_aliases {
             self.account_locks.insert(alias.clone(), task_id.clone());
         }
+        if let Ok(mut requests) = self.cancel_requests.lock() {
+            requests.remove(&task_id);
+        }
         self.tasks.insert(task_id.clone(), snapshot);
         self.append_log(&task_id, TaskLogLevel::Info, TASK_STARTED_MESSAGE)
     }
@@ -577,9 +626,13 @@ impl TaskStateStore {
         &mut self,
         task_id: impl AsRef<str>,
     ) -> Result<TaskSnapshot, TaskStateError> {
-        self.ensure_task_can_change_state(task_id.as_ref())?;
+        let task_id = task_id.as_ref();
+        self.ensure_task_can_change_state(task_id)?;
+        if let Ok(mut requests) = self.cancel_requests.lock() {
+            requests.insert(task_id.to_string());
+        }
         let sequence = self.next_task_sequence();
-        let task = self.task_mut(task_id.as_ref())?;
+        let task = self.task_mut(task_id)?;
         task.cancel_requested = true;
         refresh_available_actions(task);
         task.last_sequence = sequence;
@@ -714,6 +767,9 @@ impl TaskStateStore {
     ) -> Result<TaskSnapshot, TaskStateError> {
         let task_id = task_id.as_ref();
         self.ensure_task_can_change_state(task_id)?;
+        if let Ok(mut requests) = self.cancel_requests.lock() {
+            requests.insert(task_id.to_string());
+        }
         let sequence = self.next_task_sequence();
         let max_logs_per_task = self.max_logs_per_task;
         let message = sanitize_task_text(message.into());
@@ -803,6 +859,9 @@ impl TaskStateStore {
                 kind,
                 item_id: None,
             });
+            task.phase = ServiceTaskPhase::Running;
+            task.message = "已收到补充输入，正在继续".to_string();
+            task.waiting_for_input = None;
             refresh_available_actions(task);
             task.clone()
         };
@@ -1086,6 +1145,9 @@ impl TaskStateStore {
             self.release_locks_for_task(task_id);
             self.tasks.remove(task_id);
             self.user_inputs.remove(task_id);
+            if let Ok(mut requests) = self.cancel_requests.lock() {
+                requests.remove(task_id);
+            }
         }
         self.publish_snapshots();
         task_ids
@@ -1179,6 +1241,22 @@ impl TaskStateStore {
 
     fn publish_snapshots(&self) {
         self.snapshot_feed.replace(self.list_snapshots());
+        let Some(mirror_queue) = self.mirror_queue.as_ref() else {
+            return;
+        };
+        let Ok(mut mirrored_sequences) = self.mirrored_sequences.lock() else {
+            return;
+        };
+        let Ok(mut mirror_queue) = mirror_queue.lock() else {
+            return;
+        };
+        for (task_id, snapshot) in &self.tasks {
+            if mirrored_sequences.get(task_id) == Some(&snapshot.last_sequence) {
+                continue;
+            }
+            mirrored_sequences.insert(task_id.clone(), snapshot.last_sequence);
+            mirror_queue.push_back(snapshot.clone());
+        }
     }
 
     fn task_mut(&mut self, task_id: &str) -> Result<&mut TaskSnapshot, TaskStateError> {

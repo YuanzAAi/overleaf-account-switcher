@@ -5166,7 +5166,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <path data-edge-from="operations" data-edge-to="overleaf" data-edge-label="HTTPS" data-edge-key="4" data-edge-id="remote-api" data-composition-points="855,312;990,312" d="M 855 312 L 990 312" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="service" data-edge-to="skills" data-edge-label="凭据同步" data-edge-key="5" data-edge-id="credentials-sync" data-composition-points="445,275;445,124" d="M 445 275 L 445 124" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="service" data-edge-to="storage" data-edge-label="读写 / 加密引用" data-edge-key="6" data-edge-id="persist-data" data-composition-points="445,349;445,500" d="M 445 349 L 445 500" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="operations" data-edge-to="automation" data-edge-label="CDP" data-edge-key="7" data-edge-id="browser-cdp" data-composition-points="753,349;753,424.5;770,424.5;770,500" d="M 753 349 L 753 416.5 Q 753 424.5 761 424.5 L 762 424.5 Q 770 424.5 770 432.5 L 770 500" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="operations" data-edge-to="automation" data-edge-label="按需 CDP" data-edge-key="7" data-edge-id="browser-cdp" data-composition-points="753,349;753,424.5;770,424.5;770,500" d="M 753 349 L 753 416.5 Q 753 424.5 761 424.5 L 762 424.5 Q 770 424.5 770 432.5 L 770 500" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="operations" data-edge-to="extension" data-edge-label="WebSocket" data-edge-key="8" data-edge-id="extension-bridge" data-composition-points="767,349;767,373;966,373;966,537;990,537" d="M 767 349 L 767 365 Q 767 373 775 373 L 958 373 Q 966 373 966 381 L 966 529 Q 966 537 974 537 L 990 537" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="extension" data-edge-to="overleaf" data-edge-label="浏览器会话" data-edge-key="9" data-edge-id="browser-session" data-composition-points="1095,500;1095,349" d="M 1095 500 L 1095 349" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
 
@@ -5219,15 +5219,15 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="context" x="445" y="326" class="t-muted" font-size="9" text-anchor="middle">任务编排 / 并发 / 日志</text>
         </g>
 
-        <g id="node-operations" data-node-id="operations" data-node-label="账号与项目操作" tabindex="0" role="button" aria-label="聚焦账号与项目操作，登录态 / 订阅 / 迁移, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel="登录态 / 订阅 / 迁移" data-node-context="架构组件">
-          <title>账号与项目操作 · 登录态 / 订阅 / 迁移 · 架构组件</title>
+        <g id="node-operations" data-node-id="operations" data-node-label="账号与项目操作" tabindex="0" role="button" aria-label="聚焦账号与项目操作，凭据 / 项目管理 / 迁移, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel="凭据 / 项目管理 / 迁移" data-node-context="架构组件">
+          <title>账号与项目操作 · 凭据 / 项目管理 / 迁移 · 架构组件</title>
           <rect x="665" y="275" width="190" height="74" rx="6" class="c-mask"/>
           <rect x="665" y="275" width="190" height="74" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(671 281) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="760" y="310" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">账号与项目操作</text>
-        <text data-detail="context" x="760" y="326" class="t-muted" font-size="9" text-anchor="middle">登录态 / 订阅 / 迁移</text>
+        <text data-detail="context" x="760" y="326" class="t-muted" font-size="9" text-anchor="middle">凭据 / 项目管理 / 迁移</text>
         </g>
 
         <g id="node-overleaf" data-node-id="overleaf" data-node-label="Overleaf" tabindex="0" role="button" aria-label="聚焦Overleaf，账号 / 项目 / 云端编译, 架构组件" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="账号 / 项目 / 云端编译" data-node-context="架构组件">
@@ -5307,9 +5307,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <rect x="404" y="409" width="82" height="14" rx="3" class="c-mask"/>
           <text x="445" y="419" class="t-muted" font-size="8" text-anchor="middle">读写 / 加密引用</text>
         </g>
-        <g data-detail="context" data-edge-from="operations" data-edge-to="automation" data-edge-label="CDP" data-edge-key="7" data-edge-id="browser-cdp">
-          <rect x="746.5" y="404.5" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="761.5" y="414.5" class="t-muted" font-size="8" text-anchor="middle">CDP</text>
+        <g data-detail="context" data-edge-from="operations" data-edge-to="automation" data-edge-label="按需 CDP" data-edge-key="7" data-edge-id="browser-cdp">
+          <rect x="737.3" y="404.5" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="761.5" y="414.5" class="t-muted" font-size="8" text-anchor="middle">按需 CDP</text>
         </g>
         <g data-detail="context" data-edge-from="operations" data-edge-to="extension" data-edge-label="WebSocket" data-edge-key="8" data-edge-id="extension-bridge">
           <rect x="839.9" y="353" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
@@ -5525,10 +5525,10 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>换号与写作</h3>
+          <h3>项目与写作</h3>
         </div>
         <ul>
-          <li>&bull; 核验身份、迁移项目、切换浏览器、同步 skills</li>
+          <li>&bull; 项目管理、选择性迁移、切换浏览器与同步 skills</li>
           <li>&bull; agent 处理本地材料，Overleaf 编译并返回 PDF</li>
         </ul>
       </div>

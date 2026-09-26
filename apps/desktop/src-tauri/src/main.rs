@@ -20,7 +20,7 @@ use service::{
     ensure_local_service, health_request_ok, ManagedService, SERVICE_HOST, SERVICE_PORT,
 };
 
-const DEFAULT_DESKTOP_UI_URL: &str = "http://127.0.0.1:8765/ui/?v=20260821-runtime158";
+const DEFAULT_DESKTOP_UI_URL: &str = "http://127.0.0.1:8765/?v=20260821-runtime158";
 const DESKTOP_URL_OVERRIDE_ENV: &str = "OVERLEAF_SWITCHER_DESKTOP_URL";
 const MAIN_WINDOW_LABEL: &str = "main";
 const TRAY_ID: &str = "overleaf-account-switcher";

@@ -129,7 +129,7 @@ pub enum ProjectApiError {
 
 impl fmt::Display for ProjectApiHttpError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "project api returned HTTP {}", self.status)
+        write!(f, "协议请求返回状态码 {}", self.status)
     }
 }
 

@@ -46,6 +46,7 @@ import {
 import {
   isActiveTaskSnapshot,
   makeTaskId,
+  registrationBatchKey,
   registerPendingAccountOperation,
   renderDashboard,
   renderRuntimeLogSummary,
@@ -61,7 +62,7 @@ import {
   openAccountTool,
   setActivePage,
 } from "./workspace.js";
-import { setRegistrationStatus, syncRegistrationSource } from "./registration.js";
+import { resetRegistrationForm, setRegistrationStatus, syncRegistrationConcurrency, syncRegistrationFormLock, syncRegistrationSource } from "./registration.js";
 import { statusText } from "./format.js";
 
 export async function refresh({ detectBrowser = true, refreshSubscriptions = false, focusTask = true } = {}) {
@@ -124,6 +125,7 @@ export async function refresh({ detectBrowser = true, refreshSubscriptions = fal
     renderRuntimeLogSummary(state.taskSummary);
     renderAccounts(state.accounts);
     renderCards(cards);
+    syncRegistrationConcurrency();
     renderAddresses(addresses);
     syncCurrentAddressDisplay(currentAddress);
     document.getElementById("last-updated").textContent = new Date().toLocaleString();
@@ -304,7 +306,7 @@ export function registrationTaskStatusInfo(task) {
   if (phase === "completed") {
     return { message: "试用任务完成", tone: "success", clearAfter: 4600, terminal: true };
   }
-    if (phase === "failed") {
+  if (phase === "failed") {
     return { message: "试用任务失败，请查看运行日志", tone: "error", clearAfter: 7200, terminal: true };
   }
   if (phase === "cancelled") {
@@ -317,8 +319,23 @@ export function syncRegistrationTaskStatus(tasks) {
   const taskList = (Array.isArray(tasks) ? tasks : []).filter(
     (task) => task && task.operation_kind === "account_registration",
   );
+  const submitting = Boolean(document.getElementById("registration-submit")?.dataset.registrationSubmitting);
+  if (state.registrationTaskIds.length && !submitting) {
+    const ownTasks = state.registrationTaskIds.map((id) => taskList.find((task) => task.task_id === id));
+    if (ownTasks.every((task) => task && terminalTaskPhases.has(String(task.phase || "").toLowerCase()))) {
+      const succeeded = !state.registrationBatchHadStartFailure
+        && ownTasks.every((task) => String(task.phase || "").toLowerCase() === "completed");
+      state.registrationTaskIds = [];
+      state.registrationBatchHadStartFailure = false;
+      if (succeeded) resetRegistrationForm(true);
+    }
+  }
   const trackedTaskId = String(state.registrationTaskId || "");
   let task = trackedTaskId ? taskList.find((item) => item.task_id === trackedTaskId) || null : null;
+  if (task && terminalTaskPhases.has(String(task.phase || "").toLowerCase())) {
+    const activeTask = taskList.find((item) => taskActivePhases().includes(String(item.phase || "").toLowerCase()));
+    if (activeTask) task = activeTask;
+  }
   if (!task) {
     task = taskList
       .filter((item) => taskActivePhases().includes(String(item.phase || "").toLowerCase()))
@@ -335,8 +352,10 @@ export function syncRegistrationTaskStatus(tasks) {
     } else if (trackedTaskId) {
       clearRegistrationTaskStatusIfOwned(trackedTaskId);
       state.registrationTaskId = "";
+      syncRegistrationFormLock();
       return;
     } else {
+      syncRegistrationFormLock();
       return;
     }
   }
@@ -351,6 +370,7 @@ export function syncRegistrationTaskStatus(tasks) {
     state.registrationTaskStatusOwner = String(task.task_id || "");
     state.registrationTaskStatusMessage = visibleMessage;
   }
+  syncRegistrationFormLock();
 }
 
 export function clearRegistrationTaskStatusIfOwned(taskId) {
@@ -413,7 +433,8 @@ export function syncBrowserCredentialRecoveryTask(tasks) {
     taskList.find(
       (task) =>
         task?.operation_kind === "account_registration" &&
-        ["new_registration_credentials", "new_browser_credentials"].some((kind) => taskAwaitsInput(task, kind)),
+        (taskAwaitsInput(task, "new_browser_credentials") ||
+          (taskAwaitsInput(task, "new_registration_credentials") && !registrationBatchKey(task))),
     ) || null;
   syncRegistrationCredentialRecoveryTask(registrationTask);
   const waitingTask =

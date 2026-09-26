@@ -245,6 +245,19 @@ pub async fn refresh_account_git_token_metadata_in_store_with_backend<T: Session
     Ok(report)
 }
 
+pub fn apply_git_token_page_state_in_store_with_backend(
+    store: &AccountStore,
+    alias: &str,
+    state: &GitTokenPageState,
+    backend: &dyn SecretBackend,
+) -> Result<AccountGitTokenRefreshReport, AccountGitTokenError> {
+    let mut document = store.load().map_err(AccountGitTokenError::from_io)?;
+    let (report, journal) =
+        apply_git_token_page_state_internal(&mut document, alias, state, backend)?;
+    save_git_document_with_rollback(store, &document, vec![journal], backend)?;
+    Ok(report)
+}
+
 pub async fn refresh_account_git_token_metadata_with_browser_with_backend(
     document: &mut AccountsDocument,
     alias: &str,

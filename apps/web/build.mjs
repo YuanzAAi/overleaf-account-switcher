@@ -24,7 +24,7 @@ if (!process.argv.includes("--serve")) {
   await ctx.watch();
   const server = createServer(async (req, res) => {
     const pathname = new URL(req.url, "http://localhost").pathname;
-    if (pathname.startsWith("/ui") || pathname === "/") {
+    if (["/", "/index.html", "/app.js", "/styles.css", "/ui", "/ui/", "/ui/index.html", "/ui/app.js", "/ui/styles.css"].includes(pathname)) {
       const name = pathname.endsWith(".js")
         ? "app.js"
         : pathname.endsWith(".css")
@@ -63,6 +63,6 @@ if (!process.argv.includes("--serve")) {
     req.pipe(upstream);
   });
   server.listen(Number(process.env.PORT || 5173), "127.0.0.1", () =>
-    console.log(`http://127.0.0.1:${server.address().port}/ui/`),
+    console.log(`http://127.0.0.1:${server.address().port}/`),
   );
 }

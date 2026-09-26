@@ -13,7 +13,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY apps ./apps
 COPY --from=web /web/dist ./apps/web/dist
-ENV CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_DEBUG=0
+ENV CARGO_PROFILE_RELEASE_DEBUG=0
 ARG TARGETARCH
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,id=overleaf-target-${TARGETARCH},target=/src/target \

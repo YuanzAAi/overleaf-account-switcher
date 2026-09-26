@@ -89,11 +89,12 @@ pub enum SessionError {
     Transport(SessionTransportError),
     MissingCsrfToken,
     MissingUserInfo,
+    LoginVerificationRequired,
 }
 
 impl fmt::Display for SessionHttpError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "session request returned HTTP {}", self.status)
+        write!(f, "协议请求返回状态码 {}", self.status)
     }
 }
 
@@ -114,6 +115,7 @@ impl fmt::Display for SessionError {
             Self::Transport(err) => write!(f, "{err}"),
             Self::MissingCsrfToken => f.write_str("missing csrf token"),
             Self::MissingUserInfo => f.write_str("missing user info"),
+            Self::LoginVerificationRequired => f.write_str("登录接口不允许跳过验证"),
         }
     }
 }
@@ -146,6 +148,7 @@ pub trait SessionTransport {
 pub struct ReqwestSessionTransport {
     client: reqwest::Client,
     cookies: BTreeMap<String, String>,
+    session_expiry: Option<i64>,
 }
 
 impl ReqwestSessionTransport {
@@ -153,7 +156,277 @@ impl ReqwestSessionTransport {
         Self {
             client: reqwest::Client::new(),
             cookies,
+            session_expiry: None,
         }
+    }
+
+    pub fn cookies(&self) -> &BTreeMap<String, String> {
+        &self.cookies
+    }
+
+    pub fn session_expiry(&self) -> Option<i64> {
+        self.session_expiry
+    }
+
+    fn capture_response_cookies(&mut self, response: &reqwest::Response) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        for value in response.headers().get_all(reqwest::header::SET_COOKIE) {
+            let Ok(value) = value.to_str() else { continue };
+            let Ok(cookie) = cookie::Cookie::parse(value) else {
+                continue;
+            };
+            let expiry = cookie
+                .max_age()
+                .map(|age| now.saturating_add(age.whole_seconds()))
+                .or_else(|| {
+                    cookie
+                        .expires_datetime()
+                        .map(|value| value.unix_timestamp())
+                });
+            if cookie.name() == crate::OVERLEAF_SESSION_COOKIE {
+                self.session_expiry = expiry;
+            }
+            if cookie.value().is_empty() || expiry.is_some_and(|expiry| expiry <= now) {
+                self.cookies.remove(cookie.name());
+            } else {
+                self.cookies
+                    .insert(cookie.name().to_string(), cookie.value().to_string());
+            }
+        }
+    }
+
+    pub async fn fetch_git_token_state(&self) -> SessionResult<GitTokenPageState> {
+        let response = self
+            .get(&SessionPageRequest {
+                path: "/oauth/personal-access-tokens".to_string(),
+            })
+            .await?;
+        ensure_session_success(response.status, &response.body)?;
+        let tokens: Vec<serde_json::Value> = serde_json::from_str(&response.body)
+            .map_err(|error| SessionTransportError::new(error.to_string()))?;
+        let expiry = tokens
+            .first()
+            .filter(|_| tokens.len() == 1)
+            .and_then(|item| item.get("accessTokenExpiresAt")?.as_str())
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.timestamp());
+        Ok(GitTokenPageState {
+            visible_token: None,
+            expiry,
+            has_existing_masked_token: !tokens.is_empty(),
+            can_generate_token: tokens.is_empty(),
+            can_add_another_token: !tokens.is_empty(),
+        })
+    }
+
+    async fn post_session_json(
+        &self,
+        path: &str,
+        referer: &str,
+        body: Option<serde_json::Value>,
+    ) -> SessionResult<reqwest::Response> {
+        let csrf = OverleafSessionClient::new(self.clone())
+            .fetch_csrf_token()
+            .await?;
+        let request = self
+            .client
+            .post(format!("https://www.overleaf.com{path}"))
+            .timeout(std::time::Duration::from_secs(20))
+            .header("cookie", format_cookie_header(&self.cookies))
+            .header("x-csrf-token", csrf)
+            .header("origin", "https://www.overleaf.com")
+            .header("referer", format!("https://www.overleaf.com{referer}"))
+            .header("content-type", "application/json");
+        let request = if let Some(body) = body {
+            request.json(&body)
+        } else {
+            request
+        };
+        let response = request
+            .send()
+            .await
+            .map_err(|error| SessionTransportError::new(error.to_string()))?;
+        let status = response.status();
+        if status.is_server_error()
+            || status == reqwest::StatusCode::REQUEST_TIMEOUT
+            || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        {
+            return Err(SessionHttpError {
+                status: status.as_u16(),
+                kind: classify_project_api_status(status.as_u16()),
+                body_preview: None,
+            }
+            .into());
+        }
+        Ok(response)
+    }
+
+    pub async fn create_git_token(&self) -> SessionResult<Option<(String, Option<i64>)>> {
+        let response = self
+            .post_session_json("/oauth/personal-access-tokens", "/user/settings", None)
+            .await?;
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+        let value: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|error| SessionTransportError::new(error.to_string()))?;
+        let Some(token) = value
+            .get("accessToken")
+            .and_then(serde_json::Value::as_str)
+            .filter(|token| token.starts_with("olp_") && token.len() > 8)
+        else {
+            return Err(SessionTransportError::new("Git token response was not confirmed").into());
+        };
+        let token = token.to_string();
+        let response = self
+            .get(&SessionPageRequest {
+                path: "/oauth/personal-access-tokens".to_string(),
+            })
+            .await;
+        let expiry = response.ok().and_then(|response| {
+            serde_json::from_str::<Vec<serde_json::Value>>(&response.body)
+                .ok()?
+                .into_iter()
+                .find(|item| {
+                    item.get("accessTokenPartial")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|partial| token.starts_with(partial))
+                })?
+                .get("accessTokenExpiresAt")?
+                .as_str()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.timestamp())
+        });
+        Ok(Some((token, expiry)))
+    }
+
+    pub async fn change_password(&self, current: &str, new: &str) -> SessionResult<bool> {
+        let response = self
+            .post_session_json(
+                "/user/password/update",
+                "/user/settings",
+                Some(serde_json::json!({
+                    "currentPassword": current,
+                    "newPassword1": new,
+                    "newPassword2": new,
+                })),
+            )
+            .await?;
+        if !response.status().is_success() {
+            return Ok(false);
+        }
+        let value: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|error| SessionTransportError::new(error.to_string()))?;
+        match value
+            .pointer("/message/type")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("success") => Ok(true),
+            Some("error") => Ok(false),
+            _ => {
+                Err(SessionTransportError::new("password change response was not confirmed").into())
+            }
+        }
+    }
+
+    pub async fn try_login_with_credentials(
+        email: &str,
+        password: &str,
+    ) -> SessionResult<Option<(Self, OverleafUserInfo)>> {
+        let mut transport = Self::new(BTreeMap::new());
+        let client = transport.client.clone();
+        let login_page = client
+            .get("https://www.overleaf.com/login")
+            .timeout(std::time::Duration::from_secs(20))
+            .send()
+            .await
+            .map_err(|error| SessionTransportError::new(error.to_string()))?;
+        transport.capture_response_cookies(&login_page);
+        if !login_page.status().is_success() {
+            return Ok(None);
+        }
+        let page = login_page
+            .text()
+            .await
+            .map_err(|error| SessionTransportError::new(error.to_string()))?;
+        let Some(csrf) = extract_csrf_token(&page) else {
+            return Ok(None);
+        };
+
+        let cookie_header = format_cookie_header(&transport.cookies);
+        let can_skip = client
+            .post("https://www.overleaf.com/login/can-skip-captcha")
+            .timeout(std::time::Duration::from_secs(20))
+            .header("x-csrf-token", &csrf)
+            .header("cookie", &cookie_header)
+            .header("origin", "https://www.overleaf.com")
+            .header("referer", "https://www.overleaf.com/login")
+            .json(&serde_json::json!({ "email": email }))
+            .send()
+            .await
+            .map_err(|error| SessionTransportError::new(error.to_string()))?;
+        transport.capture_response_cookies(&can_skip);
+        if !can_skip.status().is_success() {
+            return Ok(None);
+        }
+        let can_skip = can_skip
+            .json::<bool>()
+            .await
+            .map_err(|error| SessionTransportError::new(error.to_string()))?;
+        if !can_skip {
+            return Err(SessionError::LoginVerificationRequired);
+        }
+
+        let login = client
+            .post("https://www.overleaf.com/login")
+            .timeout(std::time::Duration::from_secs(20))
+            .header("x-csrf-token", &csrf)
+            .header("cookie", format_cookie_header(&transport.cookies))
+            .header("origin", "https://www.overleaf.com")
+            .header("referer", "https://www.overleaf.com/login")
+            .json(&serde_json::json!({
+                "_csrf": csrf,
+                "email": email,
+                "password": password,
+                "g-recaptcha-response": "",
+            }))
+            .send()
+            .await
+            .map_err(|error| SessionTransportError::new(error.to_string()))?;
+        transport.capture_response_cookies(&login);
+        if !login.status().is_success() {
+            return Ok(None);
+        }
+        let body = login
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|error| SessionTransportError::new(error.to_string()))?;
+        if body.get("redir").and_then(serde_json::Value::as_str) != Some("/project")
+            || !transport
+                .cookies
+                .contains_key(crate::OVERLEAF_SESSION_COOKIE)
+        {
+            return Ok(None);
+        }
+
+        let user = OverleafSessionClient::new(transport.clone())
+            .fetch_user_info()
+            .await?;
+        if user
+            .email
+            .as_deref()
+            .is_none_or(|actual| !actual.eq_ignore_ascii_case(email))
+        {
+            return Ok(None);
+        }
+        Ok(Some((transport, user)))
     }
 
     pub fn prepare_request(

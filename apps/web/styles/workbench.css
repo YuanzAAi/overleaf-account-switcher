@@ -921,6 +921,30 @@ summary::-webkit-details-marker {
   grid-template-columns: minmax(0, 1.1fr) minmax(260px, 0.9fr);
   gap: 28px;
 }
+.registration-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  max-width: 70%;
+}
+.registration-header-actions .registration-status-tag {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.registration-header-actions .registration-status-tag:empty {
+  display: none;
+}
+.registration-header-actions .registration-reset {
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 2px 8px;
+  font-size: 10px;
+  line-height: 16px;
+}
 .registration-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -935,6 +959,40 @@ summary::-webkit-details-marker {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+}
+.registration-batch-fields {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.registration-batch-fields > p {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.registration-batch-list {
+  max-height: 310px;
+}
+.registration-batch-card {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  background: var(--surface-soft);
+}
+.registration-batch-card > strong {
+  grid-column: 1 / -1;
+  font-size: 12px;
+}
+.registration-batch-card label {
+  min-width: 0;
+  font-size: 12px;
+}
+.registration-batch-card input {
+  width: 100%;
+  min-width: 0;
 }
 .registration-side-panel {
   padding: 20px;
@@ -1442,6 +1500,9 @@ a.ui-btn { text-decoration: none; }
     grid-template-columns: 1fr;
   }
   .registration-new-fields {
+    grid-template-columns: 1fr;
+  }
+  .registration-batch-card {
     grid-template-columns: 1fr;
   }
   .resource-table-wrap {

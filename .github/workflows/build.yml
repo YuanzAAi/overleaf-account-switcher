@@ -66,8 +66,6 @@ jobs:
             target: x86_64-apple-darwin
             name: macos-x64
     runs-on: ${{ matrix.os }}
-    env:
-      CARGO_BUILD_JOBS: 1
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.0.0
@@ -241,14 +239,13 @@ jobs:
           pattern: desktop-*
           path: release
           merge-multiple: true
-      - name: Verify assets and generate checksums
+      - name: Verify assets
         working-directory: release
         run: |
           test -s overleaf-windows-x64.exe
           test -s overleaf-windows-x64-portable.zip
           test -s overleaf-macos-arm64-portable.zip
           test -s overleaf-macos-x64-portable.zip
-          sha256sum ./*.exe ./*.zip > SHA256SUMS
       - uses: softprops/action-gh-release@v3.0.3
         if: needs.prepare.outputs.existing != 'true'
         with:
@@ -264,7 +261,6 @@ jobs:
           files: |
             release/overleaf-windows-x64.exe
             release/*-portable.zip
-            release/SHA256SUMS
       - name: Replace existing release assets
         if: needs.prepare.outputs.existing == 'true'
         env:
@@ -273,6 +269,3 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           gh release upload "$RELEASE_TAG" release/*.exe release/*-portable.zip --clobber
-          if gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -qx SHA256SUMS; then
-            gh release upload "$RELEASE_TAG" release/SHA256SUMS --clobber
-          fi

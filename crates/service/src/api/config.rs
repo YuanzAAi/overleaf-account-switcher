@@ -300,17 +300,17 @@ fn service_readiness_policy_spec() -> ServiceReadinessPolicySpec {
 
 pub const EMBEDDED_UI_ASSETS: &[EmbeddedUiAssetSpec] = &[
     ui_asset(
-        "/ui/",
+        "/",
         "text/html; charset=utf-8",
         include_str!("../../../../apps/web/dist/index.html"),
     ),
     ui_asset(
-        "/ui/app.js",
+        "/app.js",
         "application/javascript; charset=utf-8",
         include_str!("../../../../apps/web/dist/app.js"),
     ),
     ui_asset(
-        "/ui/styles.css",
+        "/styles.css",
         "text/css; charset=utf-8",
         include_str!("../../../../apps/web/dist/styles.css"),
     ),

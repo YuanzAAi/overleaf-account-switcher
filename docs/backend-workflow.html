@@ -5239,14 +5239,14 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="695" y="132" class="t-muted" font-size="8" text-anchor="middle">accounts/session</text>
         </g>
 
-        <g id="node-migration" data-node-id="migration" data-node-label="按需迁移项目" tabindex="0" role="button" aria-label="聚焦按需迁移项目，projects/migration, 请求与执行" aria-pressed="false" data-node-kind="backend" data-node-sublabel="projects/migration" data-node-tag="复制 / 重新加入 / 核验访问" data-node-context="请求与执行">
-          <title>按需迁移项目 · projects/migration · 请求与执行 · 复制 / 重新加入 / 核验访问</title>
+        <g id="node-migration" data-node-id="migration" data-node-label="迁移选定项目" tabindex="0" role="button" aria-label="聚焦迁移选定项目，projects/migration, 请求与执行" aria-pressed="false" data-node-kind="backend" data-node-sublabel="projects/migration" data-node-tag="复制 / 重新加入 / 核验访问" data-node-context="请求与执行">
+          <title>迁移选定项目 · projects/migration · 请求与执行 · 复制 / 重新加入 / 核验访问</title>
           <rect x="808" y="86" width="150" height="68" rx="6" class="c-mask"/>
           <rect x="808" y="86" width="150" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(814 92) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="883" y="107" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">按需迁移项目</text>
+          <text data-node-label="" data-detail-anchor="" x="883" y="107" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">迁移选定项目</text>
           <text data-detail="context" x="883" y="124" class="t-muted" font-size="8" text-anchor="middle">projects/migration</text>
         <text data-detail="fine" x="883" y="142" class="t-backend" font-size="7" text-anchor="middle">复制 / 重新加入 / 核验访问</text>
         </g>
@@ -5278,16 +5278,16 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="301" y="258" class="t-muted" font-size="8" text-anchor="middle">错误分类与恢复提示</text>
         </g>
 
-        <g id="node-recover" data-node-id="recover" data-node-label="密码恢复 Cookie" tabindex="0" role="button" aria-label="聚焦密码恢复 Cookie，credential_jobs / CDP, 恢复与异常" aria-pressed="false" data-node-kind="backend" data-node-sublabel="credential_jobs / CDP" data-node-tag="需验证时等待用户输入" data-node-context="恢复与异常">
-          <title>密码恢复 Cookie · credential_jobs / CDP · 恢复与异常 · 需验证时等待用户输入</title>
+        <g id="node-recover" data-node-id="recover" data-node-label="密码恢复 Cookie" tabindex="0" role="button" aria-label="聚焦密码恢复 Cookie，credential_jobs, 恢复与异常" aria-pressed="false" data-node-kind="backend" data-node-sublabel="credential_jobs" data-node-tag="协议优先 / 浏览器验证" data-node-context="恢复与异常">
+          <title>密码恢复 Cookie · credential_jobs · 恢复与异常 · 协议优先 / 浏览器验证</title>
           <rect x="620" y="212" width="150" height="68" rx="6" class="c-mask"/>
           <rect x="620" y="212" width="150" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(626 218) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="695" y="233" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">密码恢复 Cookie</text>
-          <text data-detail="context" x="695" y="250" class="t-muted" font-size="8" text-anchor="middle">credential_jobs / CDP</text>
-        <text data-detail="fine" x="695" y="268" class="t-backend" font-size="7" text-anchor="middle">需验证时等待用户输入</text>
+          <text data-detail="context" x="695" y="250" class="t-muted" font-size="8" text-anchor="middle">credential_jobs</text>
+        <text data-detail="fine" x="695" y="268" class="t-backend" font-size="7" text-anchor="middle">协议优先 / 浏览器验证</text>
         </g>
 
         <g id="node-result" data-node-id="result" data-node-label="任务收尾与界面反馈" tabindex="0" role="button" aria-label="聚焦任务收尾与界面反馈，TaskSnapshot → SSE, 写回与反馈" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="TaskSnapshot → SSE" data-node-tag="释放账号锁 / 结果 / 日志" data-node-context="写回与反馈">
@@ -5612,7 +5612,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <h3>写回边界</h3>
         </div>
         <ul>
-          <li>&bull; 网络 I/O 不持账号提交锁，保存前重读最新数据</li>
+          <li>&bull; 账号变更在提交锁内重读最新数据并保存</li>
           <li>&bull; 订阅或 skills 同步失败会警告，不伪报换号失败</li>
         </ul>
       </div>

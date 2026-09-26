@@ -25,9 +25,7 @@ import {
   makeTaskId,
   retryTask,
   scheduleStatusClear,
-  isActiveTaskSnapshot,
 } from "./tasks/list.js";
-import { clearRegistrationAccountInputs } from "./registration.js";
 import { escapeAttr, escapeHtml, subscriptionLabelText } from "./format.js";
 import { postTaskResult, refresh } from "./sync.js";
 import { accountRemovalActions } from "./capabilities.js";
@@ -419,10 +417,6 @@ export function setActivePage(page, options = {}) {
   const nextPage = ["dashboard", "accounts", "registration", "resources", "settings"].includes(page)
     ? page
     : "accounts";
-  if (nextPage === "registration" && !options.preserveScroll
-    && !state.tasks.some((task) => task.operation_kind === "account_registration" && isActiveTaskSnapshot(task))) {
-    clearRegistrationAccountInputs();
-  }
   state.activePage = nextPage;
   const nav = document.querySelector(".sidebar-nav");
   const navIndex = ["dashboard", "accounts", "registration", "resources", "settings"].indexOf(nextPage);

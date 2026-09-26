@@ -92,6 +92,8 @@ export const state = {
   registrationEligibilityLoading: false,
   registrationEligibilityRequestVersion: 0,
   registrationTaskId: "",
+  registrationTaskIds: [],
+  registrationBatchHadStartFailure: false,
   registrationTaskStatusOwner: "",
   registrationTaskStatusMessage: "",
   registrationCredentialRecoveryTaskId: "",

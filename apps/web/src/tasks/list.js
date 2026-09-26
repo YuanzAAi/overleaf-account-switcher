@@ -123,6 +123,16 @@ export function taskKindCountEntries(countsByKind, limit) {
 export function renderTasks(tasks) {
   const taskItems = Array.isArray(tasks) ? tasks : [];
   const orderedTaskItems = orderRuntimeTasks(taskItems);
+  const activeRegistrationBatches = new Set(
+    taskItems
+      .filter(
+        (task) =>
+          task?.operation_kind === "account_registration" &&
+          taskActivePhases().includes(String(task.phase || "").toLowerCase()),
+      )
+      .map(registrationBatchKey)
+      .filter(Boolean),
+  );
   const clientLogs = Array.isArray(state.clientRuntimeLogs) ? state.clientRuntimeLogs : [];
   const countParts = [];
   if (taskItems.length) countParts.push(`任务 ${taskItems.length}`);
@@ -130,6 +140,18 @@ export function renderTasks(tasks) {
   document.getElementById("task-count").textContent = countParts.join(" · ") || "无任务";
   renderRuntimeLogSummary(state.taskSummary);
   const list = document.getElementById("tasks-list");
+  const inputValues = new Map(Array.from(list.querySelectorAll("[data-task-input-form]"), (form) => [
+    `${form.dataset.taskInputForm}:${form.dataset.taskInputKind}`,
+    Array.from(form.querySelectorAll("input"), (input) => input.value),
+  ]));
+  const focusedInput = list.contains(document.activeElement) && document.activeElement?.matches("[data-task-input-form] input")
+    ? document.activeElement
+    : null;
+  const focusedForm = focusedInput?.closest("[data-task-input-form]");
+  const selection = focusedInput?.selectionStart != null
+    ? [focusedInput.selectionStart, focusedInput.selectionEnd, focusedInput.selectionDirection] : null;
+  const focusedKey = focusedForm ? `${focusedForm.dataset.taskInputForm}:${focusedForm.dataset.taskInputKind}` : "";
+  const focusedIndex = focusedForm ? Array.from(focusedForm.querySelectorAll("input")).indexOf(focusedInput) : -1;
   const previousProgress = new Map(Array.from(list.querySelectorAll("[data-task-id]"), (block) => [
     block.dataset.taskId, block.querySelector(".runtime-progress > span")?.style.width,
   ]));
@@ -148,10 +170,21 @@ export function renderTasks(tasks) {
 
   list.innerHTML = [
     clientLogs.length ? runtimeClientLogBlock(clientLogs) : "",
-    ...orderedTaskItems.map((task) => runtimeTaskLogBlock(task)),
+    ...orderedTaskItems.map((task) => runtimeTaskLogBlock(task, activeRegistrationBatches)),
   ]
     .filter(Boolean)
     .join("");
+  list.querySelectorAll("[data-task-input-form]").forEach((form) => {
+    const key = `${form.dataset.taskInputForm}:${form.dataset.taskInputKind}`;
+    const values = inputValues.get(key);
+    if (!values) return;
+    const inputs = form.querySelectorAll("input");
+    inputs.forEach((input, index) => { input.value = values[index] || ""; });
+    if (key === focusedKey && inputs[focusedIndex]) {
+      inputs[focusedIndex].focus({ preventScroll: true });
+      if (selection) inputs[focusedIndex].setSelectionRange(...selection);
+    }
+  });
   if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
     list.querySelectorAll("[data-task-id]").forEach((block) => {
       const bar = block.querySelector(".runtime-progress > span");
@@ -194,6 +227,10 @@ export function orderRuntimeTasks(tasks) {
         return left.timestamp - right.timestamp;
       }
       if (leftHasTime !== rightHasTime) return leftHasTime ? 1 : -1;
+      const leftBatch = registrationBatchKey(left.task);
+      if (leftBatch && leftBatch === registrationBatchKey(right.task)) {
+        return Number(left.task.task_id.slice(leftBatch.length + 1)) - Number(right.task.task_id.slice(leftBatch.length + 1));
+      }
       return left.index - right.index;
     })
     .map(({ task }) => task);
@@ -239,7 +276,7 @@ export function runtimeClientLogBlock(logs) {
   `;
 }
 
-export function runtimeTaskLogBlock(task) {
+export function runtimeTaskLogBlock(task, activeRegistrationBatches = new Set()) {
   const phase = task.resolved_by ? "resolved" : task.phase || "unknown";
   const level = task.resolved_by ? "已恢复" : task.failure_kind || phase;
   const operation = task.operation_kind ? ` · ${formatTaskKey(task.operation_kind)}` : "";
@@ -257,11 +294,18 @@ export function runtimeTaskLogBlock(task) {
   ]
     .filter(Boolean)
     .join("");
+  const batchKey = registrationBatchKey(task);
+  const compactRegistration =
+    task.operation_kind === "account_registration" &&
+    (taskActivePhases().includes(String(task.phase || "").toLowerCase()) ||
+      (batchKey && activeRegistrationBatches.has(batchKey)));
+  const latestLog = Array.isArray(task.logs) ? task.logs.at(-1) : null;
+  const primaryMessage = compactRegistration && latestLog?.message ? latestLog.message : task.message || "";
   const progress = task.progress
     ? `<div class="runtime-line runtime-line-muted"><span class="runtime-time"></span><span class="runtime-level">进度</span><span class="runtime-message">${escapeHtml(taskProgressText(task.progress))}</span></div><div class="runtime-progress" role="progressbar" aria-valuenow="${taskProgressPercent(task.progress)}" aria-valuemin="0" aria-valuemax="100"><span style="width:${taskProgressPercent(task.progress)}%"></span></div>`
     : "";
   const logs =
-    task.logs && task.logs.length
+    !compactRegistration && task.logs && task.logs.length
       ? task.logs
           .slice(-40)
           .map(
@@ -280,17 +324,22 @@ export function runtimeTaskLogBlock(task) {
       <div class="runtime-line runtime-line-primary">
         <span class="runtime-time">${escapeHtml(runtimeTaskTime(task))}</span>
         <span class="runtime-level">${escapeHtml(statusText(level))}</span>
-        <span class="runtime-message"><strong>${escapeHtml(task.name || task.task_id)}</strong>${escapeHtml(operation)}${escapeHtml(locked)} ${escapeHtml(task.message || "")}</span>
+        <span class="runtime-message"><strong>${escapeHtml(task.name || task.task_id)}</strong>${compactRegistration ? "" : escapeHtml(operation)}${compactRegistration ? "" : escapeHtml(locked)} ${escapeHtml(primaryMessage)}</span>
         ${actions ? `<span class="runtime-actions">${actions}</span>` : ""}
       </div>
-      ${task.recovery_hint ? `<div class="runtime-line runtime-line-warn"><span class="runtime-time"></span><span class="runtime-level">hint</span><span class="runtime-message">${escapeHtml(task.recovery_hint)}</span></div>` : ""}
-      ${task.error ? `<div class="runtime-line runtime-line-error"><span class="runtime-time"></span><span class="runtime-level">error</span><span class="runtime-message">${escapeHtml(task.error)}</span></div>` : ""}
-      ${taskResultDetails(task) ? `<div class="runtime-result">${taskResultDetails(task)}</div>` : ""}
+      ${!compactRegistration && task.recovery_hint ? `<div class="runtime-line runtime-line-warn"><span class="runtime-time"></span><span class="runtime-level">hint</span><span class="runtime-message">${escapeHtml(task.recovery_hint)}</span></div>` : ""}
+      ${!compactRegistration && task.error ? `<div class="runtime-line runtime-line-error"><span class="runtime-time"></span><span class="runtime-level">error</span><span class="runtime-message">${escapeHtml(task.error)}</span></div>` : ""}
+      ${!compactRegistration && taskResultDetails(task) ? `<div class="runtime-result">${taskResultDetails(task)}</div>` : ""}
       ${logs}
       ${taskUserInputControls(task)}
       ${progress}
     </div>
   `;
+}
+
+export function registrationBatchKey(task) {
+  if (task?.operation_kind !== "account_registration") return "";
+  return String(task.task_id || "").match(/^(.*-\d{13})-\d+$/)?.[1] || "";
 }
 
 export function runtimeTaskTime(task) {
@@ -304,7 +353,7 @@ export function runtimeTaskTimestamp(task) {
   );
   if (Number.isFinite(explicit)) return explicit;
 
-  const match = String((task && task.task_id) || "").match(/-(\d{13})$/);
+  const match = String((task && task.task_id) || "").match(/-(\d{13})(?:-\d+)?$/);
   return match ? Number(match[1]) : Number.NaN;
 }
 
@@ -540,7 +589,7 @@ export function taskEmailCodeInput(task) {
 }
 
 export function taskRegistrationCredentialsInput(task) {
-  if (task?.operation_kind === "account_registration") return "";
+  if (task?.operation_kind === "account_registration" && !registrationBatchKey(task)) return "";
   const action = taskInputActionForKind("new_registration_credentials");
   if (
     !taskCurrentlyWaitsForInput(task, "new_registration_credentials") ||

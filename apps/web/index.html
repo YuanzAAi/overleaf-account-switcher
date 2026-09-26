@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Overleaf 账号控制台</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="/ui/styles.css?v=20260821-runtime158">
+    <link rel="stylesheet" href="/styles.css?v=20260821-runtime158">
   </head>
   <body>
     <header class="topbar app-header">
@@ -396,7 +396,10 @@
           <div>
             <h2 class="page-title">试用注册</h2>
           </div>
-          <span id="registration-status" class="ui-tag registration-status-tag"></span>
+          <div class="registration-header-actions">
+            <button id="registration-reset" class="ui-btn registration-reset" type="button">刷新</button>
+            <span id="registration-status" class="ui-tag registration-status-tag"></span>
+          </div>
         </div>
         <div class="registration-grid">
           <form id="registration-form" class="registration-form ui-form">
@@ -406,6 +409,10 @@
                 <option value="new">新号</option>
                 <option value="existing">老号</option>
               </select>
+            </label>
+            <label id="registration-concurrency-field">
+              并发任务数
+              <input id="registration-concurrency" name="concurrency" type="number" min="1" step="1" value="1" inputmode="numeric">
             </label>
             <label id="registration-existing-method-field" hidden>
               登录方式
@@ -421,24 +428,6 @@
                 <option value="">切换到老号后检查资格</option>
               </select>
             </label>
-            <div id="registration-new-fields" class="registration-new-fields">
-              <label id="registration-alias-field">
-                别名
-                <input id="registration-alias" name="alias" type="text" placeholder="留空则使用邮箱前缀" autocomplete="off">
-              </label>
-              <label id="registration-email-field">
-                邮箱
-                <input id="registration-email" name="email" type="email" autocomplete="off">
-              </label>
-              <label id="registration-password-field">
-                密码
-                <input id="registration-password" name="password" type="password" minlength="8" autocomplete="new-password">
-              </label>
-              <label id="registration-cookie-field" hidden>
-                overleaf_session2
-                <input id="registration-session-cookie" name="session_cookie" type="password" autocomplete="off">
-              </label>
-            </div>
             <label>
               试用期
               <select id="registration-trial-days" name="trial_days">
@@ -463,6 +452,32 @@
               <input id="registration-git-token" name="auto_fetch_git_token" type="checkbox" checked>
               <span>Git 令牌</span>
             </label>
+            <label id="registration-one-card-field" class="check-row registration-check-row" hidden>
+              <input id="registration-one-card" name="one_card_per_account" type="checkbox">
+              <span>一卡一号</span>
+            </label>
+            <div id="registration-new-fields" class="registration-new-fields">
+              <label id="registration-alias-field">
+                别名
+                <input id="registration-alias" name="alias" type="text" placeholder="留空则使用邮箱前缀" autocomplete="off">
+              </label>
+              <label id="registration-email-field">
+                邮箱
+                <input id="registration-email" name="email" type="email" autocomplete="off">
+              </label>
+              <label id="registration-password-field">
+                密码
+                <input id="registration-password" name="password" type="password" minlength="8" autocomplete="new-password">
+              </label>
+              <label id="registration-cookie-field" hidden>
+                overleaf_session2
+                <input id="registration-session-cookie" name="session_cookie" type="password" autocomplete="off">
+              </label>
+            </div>
+            <div id="registration-batch-fields" class="registration-batch-fields" hidden>
+              <p>账号信息 · 别名留空则使用邮箱前缀</p>
+              <div id="registration-batch-list" class="password-target-list registration-batch-list"></div>
+            </div>
             <button id="registration-submit" class="ui-btn ui-btn-primary registration-submit" type="submit">开始注册</button>
           </form>
           <aside class="registration-side-panel" aria-label="试用配置摘要">
@@ -826,6 +841,6 @@
       </section>
     </div>
 
-    <script src="/ui/app.js?v=20260821-runtime158" defer></script>
+    <script src="/app.js?v=20260821-runtime158" defer></script>
   </body>
 </html>

@@ -389,6 +389,89 @@ where
     Ok(report)
 }
 
+pub fn save_confirmed_password_change_in_store_with_backend(
+    store: &AccountStore,
+    alias: &str,
+    new_password: SecretText,
+    login: Option<LoginResult>,
+    now_unix: i64,
+    backend: &dyn SecretBackend,
+) -> Result<OverleafPasswordChangeReport, OverleafPasswordChangeError> {
+    let alias = alias.trim();
+    if let Err(error) = validate_new_password(new_password.expose()) {
+        return Err(OverleafPasswordChangeError::PasswordTooShort {
+            minimum: error.minimum,
+        });
+    }
+    let mut document = store.load().map_err(OverleafPasswordChangeError::from_io)?;
+    let record = document.accounts.get(alias).ok_or_else(|| {
+        OverleafPasswordChangeError::AccountAliasNotFound {
+            alias: alias.to_string(),
+        }
+    })?;
+    let email = non_empty(record.email.as_deref())
+        .ok_or_else(|| OverleafPasswordChangeError::MissingEmail {
+            alias: alias.to_string(),
+        })?
+        .to_string();
+    if let Some(actual) = login.as_ref().and_then(|login| login.email.as_deref()) {
+        if normalize_email(actual) != normalize_email(&email) {
+            return Err(OverleafPasswordChangeError::LoginEmailMismatch {
+                expected: email,
+                actual: actual.to_string(),
+            });
+        }
+    }
+    let mut journal = AccountSecretWriteJournal::default();
+    if let Some(login) = login.as_ref() {
+        let cookies = cookies_to_map(&login.cookies);
+        session_cookie(&cookies)?;
+        if let Err(error) = apply_login_update(
+            &mut document,
+            alias,
+            login,
+            &cookies,
+            now_unix,
+            backend,
+            &mut journal,
+        ) {
+            return Err(rollback_password_change_error(journal, backend, error));
+        }
+    }
+    let record = document
+        .accounts
+        .get_mut(alias)
+        .expect("account checked above");
+    if let Err(error) = write_changed_password(
+        record,
+        alias,
+        new_password.into_inner(),
+        backend,
+        &mut journal,
+    ) {
+        return Err(rollback_password_change_error(journal, backend, error));
+    }
+    let cookie_expiry = document
+        .accounts
+        .get(alias)
+        .and_then(|record| record.cookie_expiry);
+    journal.commit(
+        store,
+        &document,
+        backend,
+        OverleafPasswordChangeError::from_io,
+    )?;
+    Ok(OverleafPasswordChangeReport {
+        alias: alias.to_string(),
+        email,
+        status: OverleafPasswordChangeStatus::Changed,
+        password_updated: true,
+        login_updated: login.is_some(),
+        cookie_expiry: cookie_expiry.map(|value| value as i64),
+        failure_message: None,
+    })
+}
+
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }

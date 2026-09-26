@@ -32,8 +32,21 @@ pub fn run() -> io::Result<()> {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs() as i64)
             .unwrap_or_default();
-        if let Ok(mut state) = maintenance_state.lock() {
+        let jobs = if let Ok(mut state) = maintenance_state.lock() {
             reconcile_browser_sessions(&mut state, now_unix);
+            state.take_background_jobs()
+        } else {
+            Vec::new()
+        };
+        for job in jobs {
+            let job_state = Arc::clone(&maintenance_state);
+            let thread_name = format!("overleaf-api-{}", job.name());
+            if let Err(error) = thread::Builder::new()
+                .name(thread_name)
+                .spawn(move || job.run(job_state))
+            {
+                eprintln!("background job start failed: {error}");
+            }
         }
     });
 
@@ -242,6 +255,9 @@ fn requires_account_commit_lock(method: &str, target: &str) -> bool {
         return false;
     }
     let path = request_path(target);
+    if path == "/accounts/register" {
+        return false;
+    }
     path == "/accounts" || path.starts_with("/accounts/") || path == "/registration"
 }
 
@@ -397,7 +413,9 @@ fn request_body(request: &str) -> &str {
 fn ui_asset_response(method: &str, target: &str) -> Option<ApiResponse> {
     let path = request_path(target);
     let path = match path {
-        "/ui" | "/ui/index.html" => "/ui/",
+        "/index.html" | "/ui" | "/ui/" | "/ui/index.html" => "/",
+        "/ui/app.js" => "/app.js",
+        "/ui/styles.css" => "/styles.css",
         other => other,
     };
     let asset = crate::api::EMBEDDED_UI_ASSETS

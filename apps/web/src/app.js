@@ -61,7 +61,9 @@ import {
 } from "./accounts/actions.js";
 import {
   refreshRegistrationEligibilityForSelectedTrial,
+  resetRegistrationForm,
   startRegistration,
+  syncRegistrationConcurrency,
   syncRegistrationSource,
 } from "./registration.js";
 import {
@@ -212,8 +214,14 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("detect-browser-account").addEventListener("click", detectBrowserAccount);
   document.getElementById("credential-add-form").addEventListener("submit", addCredentialAccounts);
   document.getElementById("registration-form").addEventListener("submit", startRegistration);
+  document.getElementById("registration-reset").addEventListener("click", () => resetRegistrationForm());
   document.getElementById("registration-source").addEventListener("change", syncRegistrationSource);
   document.getElementById("registration-existing-method").addEventListener("change", syncRegistrationSource);
+  document.getElementById("registration-concurrency").addEventListener("input", syncRegistrationConcurrency);
+  document.getElementById("registration-batch-list").addEventListener("input", syncRegistrationConcurrency);
+  document.getElementById("registration-one-card").addEventListener("change", syncRegistrationConcurrency);
+  document.getElementById("registration-card-strategy").addEventListener("change", syncRegistrationConcurrency);
+  document.getElementById("registration-card-bin").addEventListener("change", syncRegistrationConcurrency);
   document
     .getElementById("registration-trial-days")
     .addEventListener("change", refreshRegistrationEligibilityForSelectedTrial);
