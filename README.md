@@ -183,7 +183,7 @@ docker compose -f docker/compose.yml pull
 docker compose -f docker/compose.yml up -d
 ```
 
-在宿主机 Chrome 打开 **http://127.0.0.1:8765/**，即可使用与桌面版相同的工作台。需要浏览器无感换号时，在这个 Chrome 档案中加载仓库里的 `chrome_extension`，扩展连接本机 `9876` 端口。
+在宿主机 Chrome 打开 `http://127.0.0.1:8765/`，即可使用与桌面版相同的工作台。需要浏览器无感换号时，在这个 Chrome 档案中加载仓库里的 `chrome_extension`，扩展连接本机 `9876` 端口。
 
 登录与注册任务使用容器内的独立浏览器。遇到 reCAPTCHA 时，点击任务等待区或“设置运行”中的**打开任务浏览器**完成验证，日常操作仍在 Web UI 中进行。
 

@@ -183,7 +183,7 @@ docker compose -f docker/compose.yml pull
 docker compose -f docker/compose.yml up -d
 ```
 
-Open **http://127.0.0.1:8765/** in the host's Chrome to use the same workspace as the desktop application. For browser account switching, load the repository's `chrome_extension` in that Chrome profile. It connects through local port `9876`.
+Open `http://127.0.0.1:8765/` in the host's Chrome to use the same workspace as the desktop application. For browser account switching, load the repository's `chrome_extension` in that Chrome profile. It connects through local port `9876`.
 
 Login and registration tasks use a separate browser inside the container. When reCAPTCHA is required, choose **Open task browser** in the task's waiting area or Settings to complete it. Continue everyday account operations in the Web UI.
 
