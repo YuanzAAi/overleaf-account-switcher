@@ -48,10 +48,10 @@ An agent can handle much of a LaTeX writing workflow, but going all-in on agents
 | Account management | Card and list views, search and filters, bulk selection, aliases, password login, Cookie import, queued file imports, and single-file or multi-file exports. |
 | Sessions and credentials | Cookie identity checks and HTTP-first session recovery, Git token retrieval and generation, local password updates, remote password changes, and credential copying and status checks. |
 | Browser account switching | Switch within the current Chrome profile, verify the target identity, refresh subscription information, and optionally migrate projects and synchronize skills credentials. |
-| Project management | Independent per-account project windows with copy, rename, ZIP download, PDF compilation, archive, and trash controls; choose projects before switching while preserving their order and verifying target access. |
-| Overleaf Skills | Install, update, and uninstall Codex / Claude Code skills for project reads and edits, Git history, cloud compilation, and PDF / source / log downloads. |
-| Registration and subscriptions | Concurrent new-account registration with per-account inputs and optional one-card-per-account selection, reCAPTCHA and email verification, address and payment forms, trial eligibility checks, plan changes, trial extensions, and cancellation of renewal. |
-| Cards and addresses | Bulk card entry, status changes, selected exports and deletion, plus address retrieval, selection, and copying. |
+| Project management | Independent per-account project windows with search and refresh, copy, rename, ZIP download, PDF compilation and download, archive, and trash controls; choose projects before switching while preserving their order and verifying target access. |
+| Overleaf Skills | Install, update, and uninstall Codex / Claude Code skills and synchronize the current account's credentials so agents can edit projects, inspect Git history, compile in the cloud, and download PDFs, source, and logs. |
+| Registration and subscriptions | 7-day and 21-day trial options, concurrent new-account registration, per-account inputs and optional one-card-per-account selection, reCAPTCHA and email verification, address and payment forms, existing-account eligibility checks, plan changes, trial extensions, and cancellation of renewal. |
+| Cards and addresses | Bulk card imports, BIN filters, new / used / failed statuses, card-selection policies, selected exports and deletion, plus address retrieval, selection, and copying. |
 | Tasks and runtime | Concurrent queues, account locks, user-input waits, cancellation and retries, live logs, proxy settings, application updates, browser profiles, and temporary-file cleanup. |
 
 ### Why Overleaf Account Switcher
@@ -68,6 +68,21 @@ Compile limits generally follow the **project owner's** plan; switching a collab
   <img src="docs/images/accounts-light.png" alt="Account workspace showing plans, expiry, credential status, browser switching, and execution logs" width="1000">
 </p>
 
+### Trials, cards, and concurrency
+
+Import cards in bulk and filter by BIN and status. Registration draws from the selected card pool and retrieves a billing address automatically. Card policies support new cards first, followed by used and failed cards, or new cards only. Expired cards are excluded.
+
+- **7 days or 21 days.** The 7-day option follows the base trial flow. The 21-day option then attempts to accept an additional 14 days and verifies that the remote expiry has actually advanced. The flow subsequently confirms the switch to Pro annual and cancellation of renewal before saving the account. Trial duration and progress on account cards come from the actual subscription, not the selected number of days.
+- **New and existing accounts.** New-account registration defaults to one task. Concurrent mode provides a separate alias, email, and password row for each account; a blank alias uses the email prefix. Existing accounts remain single-task and can use a saved account, email and password, or Cookie. Eligibility checks combine subscription state with the relevant trial-plan page: Free alone does not imply eligibility.
+- **Independent tasks.** Each concurrent account has its own browser session, progress, logs, verification-code input, and cancellation control. A failed task or closed browser does not cancel the other accounts' tasks. Users complete reCAPTCHA in the corresponding browser.
+- **One card per account.** When enabled, accounts in the batch use distinct cards, and concurrency is capped by the valid cards matching the selected BIN and policy. Otherwise, cards may be reused under that policy. Card reservations are released after the batch ends; later tasks select cards according to their current status.
+
+### Project management and selective migration
+
+Each account has an independent project window showing the project name, Owner, and last modification time, with search, select-all, and refresh controls. Operations such as copying, renaming, and archiving reload the list. The workspace, archive, and trash are separate views, with unarchive, restore, and owner-confirmed permanent deletion available where applicable.
+
+When migration is enabled, switching first opens a selection of the source account's workspace projects, all selected by default. Archived and trashed projects are excluded. Closing this window before confirming does not start the switch. Once confirmed, only selected projects are migrated, preserving their relative order in the source list. Owned projects are copied to the target account; shared projects are rejoined and their access verified. The browser switches afterward, with optional skills credential synchronization.
+
 <a id="architecture"></a>
 
 ## How it works
@@ -78,23 +93,34 @@ Compile limits generally follow the **project owner's** plan; switching a collab
   <img src="docs/images/architecture.png" alt="Overleaf Account Switcher architecture and connected workflows" width="1200">
 </p>
 
-The workspace sends operations to the Rust service, whose task layer manages concurrency, account locks, and progress. Account and project operations share the Overleaf protocol client, browser automation, and extension bridge: the protocol handles identity, subscription, login, and credential operations, with a separate browser used when needed; the Chrome extension switches accounts in your everyday browser.
+Desktop and Docker share the `apps/web` interface and Rust service. Tauri handles desktop windows, the tray, native file dialogs, and the local service lifecycle; Docker exposes the same HTTP API and Web UI. The interface submits operations over HTTP and receives task state and logs over SSE.
 
-Account data stays local, with passwords, Cookies, Git tokens, and sensitive card fields stored in the keyring. A successful switch can synchronize skills credentials. The agent then uses Cookies for project reads and compilation, and Git for edits and history. Desktop runs the service locally; Docker runs it in a container. Agents stay on the host.
+The service separates account credentials, project management and migration, registration and subscriptions, and card and address resources. `api` dispatches operations and `runtime` manages tasks. Three complementary paths reach Overleaf: `overleaf-api` reuses Cookies and CSRF tokens for account and project requests; `browser` uses CDP to drive a separate Chrome session for interactive login, registration, and human verification; and the WebSocket extension bridge handles Cookies, tabs, and acknowledgments for seamless switching in the everyday Chrome profile.
+
+`storage` keeps account, card, and address metadata separate from sensitive fields such as passwords, Cookies, and Git tokens, using keyring references in business records. Desktop data stays on the local machine; Docker data lives in the mounted data directory. `overleaf-skills` is a separate agent tool: the workspace installs it and synchronizes credentials, while agents use Cookies to read and compile projects and Git for edits and history. The workspace does not invoke skills to carry out its own operations. The Chrome extension and agents run on the host.
 
 ### How the backend executes a task
 
-Browser account switching illustrates the actual execution path below. Green arrows show execution and state updates; the recovery branch handles a missing or expired Cookie.
+The first diagram maps modules and access paths. The second expands the shared task lifecycle and registration state machine. Existing-account operations begin with session validation or recovery; registration proceeds through verification, payment, subscription confirmation, and cleanup. Green arrows trace registration, while failure or cancellation can occur at any step. SSE streams state throughout execution, not just at completion.
 
 <p align="center">
-  <img src="docs/images/backend-workflow.png" alt="Backend execution: task admission, identity checks, Cookie recovery, project migration, extension acknowledgments, state updates, and skills synchronization" width="1200">
+  <img src="docs/images/backend-workflow.png" alt="Backend tasks and registration state machine: session recovery, account and project operations, human verification, card payment, subscription confirmation, extension and cancellation, persistence, and independent cleanup" width="1200">
 </p>
 
 - **Requests and execution are separate.** `runtime/server` receives requests and `api` dispatches operations. `runtime/tasks` tracks account locks, progress, and retry information. Long-running work executes in the background while SSE sends task snapshots to the interface.
 - **Session recovery uses a shared path.** `accounts/session` verifies identity; `api/credential_jobs` attempts protocol login before switching to a separate browser when needed. reCAPTCHA or email verification waits for user input, then the original task resumes. Password changes and Git token operations use the same task entry point.
-- **Confirm remote results before committing locally.** `projects/migration` optionally copies or rejoins projects and checks access. The current account is saved only after the extension sets the Cookie, refreshes tabs, and reads the expiry successfully. Subscription refresh and optional skills synchronization follow. Failures in those follow-up steps are reported separately, not as a failed account switch.
+- **Registration advances on confirmed state, not successful clicks.** `workflows/registration` defines the steps, while `api/registration` drives the browser and checks actual state. Waiting for reCAPTCHA or an email code pauses only the relevant task. Payment must lead to a confirmed subscription; accepting an extension must advance the expiry, followed by confirmation of the plan change and cancellation of renewal. An unconfirmed extension produces a warning; the flow still proceeds to cancellation and saves the actual duration instead of assuming 21 days.
+- **Switching migrates first, then commits after extension acknowledgments.** `projects/migration` optionally copies or rejoins projects and checks access. The current account is saved only after the extension sets the Cookie, refreshes tabs, and reads the expiry successfully. Subscription refresh and optional skills synchronization follow. Failures in those follow-up steps are reported separately, not as a failed account switch.
 
-`workflows/registration` defines registration and subscription steps; `api/registration` drives the browser and checks page state, with independent input, progress, and session cleanup for each concurrent task. `resources` manages cards and addresses, while `accounts/io` handles account imports and exports. These modules share persistence and keyring access through `storage`. Account changes reread the latest data and save under the commit lock, so concurrent tasks do not overwrite one another. Cancelled browser tasks finish session cleanup before releasing their account locks.
+Other features reuse the same task and session infrastructure with their own execution paths:
+
+| Operation | Execution and confirmation |
+| --- | --- |
+| Account maintenance | `accounts/io` handles imports and exports; `api/credential_jobs` orchestrates session recovery, password changes, and Git token operations. Recovered Cookies are identity-checked before saved credentials are updated. |
+| Projects and downloads | `api/projects` uses `overleaf-api` for project operations and cloud compilation. Project permissions govern access; compile timeouts and errors enter the task log with readable explanations. ZIP / PDF payloads pass through memory: desktop writes a file only after a save path is confirmed, while Web UI delegates downloads to the browser. |
+| Registration resources and persistence | `resources` selects cards by BIN, expiry, and policy and supplies addresses. After subscription management finishes, the task collects the Cookie, actual expiry, and Git token when required by the selected setting. Identity and required data are checked before saving the account; submitting payment alone does not mark it complete. |
+
+Account changes reread the latest data and save under the commit lock, so concurrent tasks do not overwrite one another. Concurrent registration keeps input, progress, and sessions separate for each account. Cancelled browser tasks finish session cleanup before releasing account locks; card reservations are released when the batch ends. Browser account switching remains serial to prevent competing changes to the current browser account.
 
 <a id="download"></a>
 

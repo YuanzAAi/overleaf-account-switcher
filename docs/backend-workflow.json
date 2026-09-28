@@ -2,57 +2,60 @@
   "schema_version": 2,
   "diagram_type": "workflow",
   "meta": {
-    "title": "后端任务执行 · 无感换号链路",
+    "title": "后端任务 · 业务分支与注册状态机",
     "locale": "zh-CN",
     "quality_profile": "showcase",
     "legend": {
       "entries": {
-        "frontend": { "label": "界面与浏览器" },
+        "frontend": { "label": "用户交互" },
         "backend": { "label": "业务执行" },
-        "security": { "label": "任务控制" },
-        "messagebus": { "label": "后台调度" },
-        "database": { "label": "本地持久化" }
+        "security": { "label": "异常事件" },
+        "messagebus": { "label": "任务调度" },
+        "database": { "label": "结果与持久化" }
       }
     }
   },
   "lanes": [
-    { "id": "execution", "label": "请求与执行" },
-    { "id": "recovery", "label": "恢复与异常", "variant": "exception" },
-    { "id": "commit", "label": "写回与反馈" }
+    { "id": "execution", "label": "任务入口与已有账号操作" },
+    { "id": "registration", "label": "注册与订阅状态机" },
+    { "id": "completion", "label": "结果提交与任务收尾" }
   ],
-  "mainPath": ["request", "admission", "background", "identity", "migration", "bridge", "persist"],
+  "mainPath": ["request", "registration-start", "verification", "payment", "subscription", "management", "persist"],
+  "semanticChecks": {
+    "allowedRoots": ["request", "failure"],
+    "allowedTerminals": ["result"]
+  },
   "nodes": [
-    { "id": "request", "lane": "execution", "col": 0, "type": "frontend", "label": "HTTP 请求", "sublabel": "runtime/server → api", "width": 150 },
-    { "id": "admission", "lane": "execution", "col": 1, "type": "security", "label": "任务准入与账号锁", "sublabel": "runtime/tasks", "width": 150 },
-    { "id": "background", "lane": "execution", "col": 2, "type": "messagebus", "label": "后台执行", "sublabel": "ApiBackgroundJob", "width": 150 },
-    { "id": "identity", "lane": "execution", "col": 3, "type": "backend", "label": "核验目标身份", "sublabel": "accounts/session", "width": 150 },
-    { "id": "migration", "lane": "execution", "col": 4, "type": "backend", "label": "迁移选定项目", "sublabel": "projects/migration", "tag": "复制 / 重新加入 / 核验访问", "width": 150 },
-    { "id": "bridge", "lane": "execution", "col": 5, "type": "frontend", "label": "执行换号命令", "sublabel": "extension_bridge", "tag": "写 Cookie / 刷新 / 读有效期", "width": 150 },
-    { "id": "recover", "lane": "recovery", "col": 3, "type": "backend", "label": "密码恢复 Cookie", "sublabel": "credential_jobs", "tag": "协议优先 / 浏览器验证", "width": 150 },
-    { "id": "failure", "lane": "recovery", "col": 1, "type": "security", "label": "记录失败", "sublabel": "错误分类与恢复提示", "width": 150 },
-    { "id": "persist", "lane": "commit", "col": 5, "type": "database", "label": "写回当前账号", "sublabel": "AccountStore", "tag": "提交锁内重读再保存", "width": 150 },
-    { "id": "subscription", "lane": "commit", "col": 3, "type": "backend", "label": "刷新订阅元数据", "sublabel": "accounts/session", "tag": "计划 / 到期时间 / 试用", "width": 150 },
-    { "id": "skills", "lane": "commit", "col": 2, "type": "backend", "label": "按需同步 skills", "sublabel": "api/skills → state.json", "width": 150 },
-    { "id": "result", "lane": "commit", "col": 0, "type": "frontend", "label": "任务收尾与界面反馈", "sublabel": "TaskSnapshot → SSE", "tag": "释放账号锁 / 结果 / 日志", "width": 150 }
+    { "id": "request", "lane": "execution", "col": 0, "type": "messagebus", "label": "请求与任务准入", "sublabel": "api + runtime/tasks", "tag": "校验 / 账号锁 / 后台执行", "width": 150 },
+    { "id": "session", "lane": "execution", "col": 1, "type": "backend", "label": "核验并恢复会话", "sublabel": "credential_jobs", "tag": "HTTP 优先 / 按需 Chrome", "width": 150 },
+    { "id": "operations", "lane": "execution", "col": 3, "type": "backend", "label": "账号与项目操作", "sublabel": "accounts + api/projects", "tag": "凭据维护 / 编译 / 迁移换号", "width": 150 },
+    { "id": "registration-start", "lane": "registration", "col": 0, "type": "backend", "label": "注册或试用资格核验", "sublabel": "api/registration", "tag": "新号创建 / 老号查计划", "width": 150 },
+    { "id": "verification", "lane": "registration", "col": 1, "type": "frontend", "label": "按需等待人工验证", "sublabel": "WaitingForUser", "tag": "reCAPTCHA / 邮箱验证码", "width": 150 },
+    { "id": "payment", "lane": "registration", "col": 2, "type": "backend", "label": "地址与卡片支付", "sublabel": "resources + browser", "tag": "BIN / 卡片策略 / 独立会话", "width": 150 },
+    { "id": "subscription", "lane": "registration", "col": 3, "type": "backend", "label": "确认订阅已生效", "sublabel": "页面 + 会话接口", "tag": "读取实际计划与到期时间", "width": 150 },
+    { "id": "management", "lane": "registration", "col": 4, "type": "backend", "label": "延期与取消续订", "sublabel": "api/registration", "tag": "可选 +14 天 / 改计划 / 取消", "width": 150 },
+    { "id": "persist", "lane": "completion", "col": 5, "type": "database", "label": "确认结果与按需保存", "sublabel": "storage + session", "tag": "真实到期 / Cookie / Git", "width": 150 },
+    { "id": "failure", "lane": "completion", "col": 3, "type": "security", "label": "失败或取消事件", "sublabel": "任一步骤均可触发", "tag": "记录原因 / 停止对应任务", "width": 150 },
+    { "id": "cleanup", "lane": "completion", "col": 1, "type": "backend", "label": "清理对应任务会话", "sublabel": "profiles + tasks", "tag": "清理浏览器后释放账号锁", "width": 150 },
+    { "id": "result", "lane": "completion", "col": 0, "type": "frontend", "label": "结果与界面刷新", "sublabel": "TaskSnapshot / SSE", "tag": "逐号进度 / 日志 / 终态", "width": 150 }
   ],
   "edges": [
-    { "id": "receive", "from": "request", "to": "admission", "variant": "emphasis" },
-    { "id": "schedule", "from": "admission", "to": "background", "variant": "emphasis" },
-    { "id": "execute", "from": "background", "to": "identity", "variant": "emphasis" },
-    { "id": "verified", "from": "identity", "to": "migration", "label": "有效", "variant": "emphasis" },
-    { "id": "migrated", "from": "migration", "to": "bridge", "variant": "emphasis" },
-    { "id": "recover-session", "from": "identity", "to": "recover", "label": "Cookie 缺失 / 失效", "variant": "security", "role": "branch" },
-    { "id": "resume", "from": "recover", "to": "identity", "label": "恢复后续跑一次", "variant": "dashed", "role": "return" },
-    { "id": "unrecoverable", "from": "recover", "to": "failure", "label": "无密码 / 恢复失败", "variant": "security", "role": "error" },
-    { "id": "report-failure", "from": "failure", "to": "result", "variant": "security", "role": "error" },
-    { "id": "acknowledged", "from": "bridge", "to": "persist", "label": "三条回执成功", "variant": "emphasis" },
-    { "id": "read-subscription", "from": "persist", "to": "subscription", "variant": "emphasis", "role": "return" },
-    { "id": "sync-credentials", "from": "subscription", "to": "skills", "label": "更新或警告", "variant": "emphasis", "role": "return" },
-    { "id": "complete", "from": "skills", "to": "result", "variant": "emphasis", "role": "return" }
+    { "id": "existing-session", "from": "request", "to": "session" },
+    { "id": "authenticated", "from": "session", "to": "operations", "label": "身份确认后执行" },
+    { "id": "operation-result", "from": "operations", "to": "persist", "label": "核验远端结果", "fromSide": "right", "toSide": "top" },
+    { "id": "registration-entry", "from": "request", "to": "registration-start", "label": "注册 / 试用", "variant": "emphasis", "role": "branch" },
+    { "id": "verify-user", "from": "registration-start", "to": "verification", "variant": "emphasis" },
+    { "id": "verified", "from": "verification", "to": "payment", "variant": "emphasis" },
+    { "id": "payment-confirmed", "from": "payment", "to": "subscription", "variant": "emphasis" },
+    { "id": "manage-subscription", "from": "subscription", "to": "management", "variant": "emphasis" },
+    { "id": "save-confirmed", "from": "management", "to": "persist", "label": "核验并提取凭据", "variant": "emphasis", "fromSide": "right", "toSide": "right" },
+    { "id": "success-cleanup", "from": "persist", "to": "cleanup", "label": "执行完成", "variant": "emphasis", "role": "return", "fromSide": "bottom", "toSide": "bottom" },
+    { "id": "failure-cleanup", "from": "failure", "to": "cleanup", "label": "独立收尾", "variant": "security", "role": "error" },
+    { "id": "complete", "from": "cleanup", "to": "result", "variant": "emphasis", "role": "return" }
   ],
   "cards": [
-    { "dot": "cyan", "title": "共用任务底座", "items": ["账号锁防止冲突，浏览器批次限制并发", "等待输入、取消与重试由任务状态统一管理"] },
-    { "dot": "emerald", "title": "业务模块复用", "items": ["credential_jobs 处理登录、改密与 Git token", "registration 驱动订阅状态机，resources 管理卡片与地址"] },
-    { "dot": "amber", "title": "写回边界", "items": ["账号变更在提交锁内重读最新数据并保存", "订阅或 skills 同步失败会警告，不伪报换号失败"] }
+    { "dot": "cyan", "title": "逐号状态与输入", "items": ["并发任务各自等待验证、推进步骤和清理会话", "SSE 全程推送状态，单个任务结束不取消其他任务"] },
+    { "dot": "emerald", "title": "以远端状态为准", "items": ["Free 不等于试用资格，额外 14 天需核验实际延长", "扩展回执成功后才写回换号，项目操作核验访问权限"] },
+    { "dot": "amber", "title": "资源与提交边界", "items": ["一卡一号在本批次内独占，整批结束释放卡片占用", "账号提交锁内重读再保存，按需同步 skills 凭据"] }
   ]
 }

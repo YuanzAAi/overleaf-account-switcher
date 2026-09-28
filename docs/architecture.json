@@ -5,34 +5,52 @@
     "title": "Overleaf Account Switcher",
     "locale": "zh-CN",
     "quality_profile": "showcase",
-    "viewBox": [1240, 620]
+    "legend": {
+      "entries": {
+        "frontend": { "label": "界面与扩展" },
+        "backend": { "label": "业务与访问" },
+        "database": { "label": "本地持久化" },
+        "cloud": { "label": "Overleaf 云端" },
+        "messagebus": { "label": "任务调度" },
+        "external": { "label": "Agent 入口" }
+      }
+    },
+    "viewBox": [1380, 760]
   },
   "components": [
-    { "id": "agents", "type": "external", "label": "Agents", "sublabel": "Codex / Claude Code", "pos": [40, 50], "size": [190, 74] },
-    { "id": "skills", "type": "backend", "label": "overleaf-skills", "sublabel": "项目编辑 / 编译 / PDF", "pos": [350, 50], "size": [190, 74] },
-    { "id": "workbench", "type": "frontend", "label": "账号工作台", "sublabel": "Desktop / Web UI", "pos": [40, 275], "size": [190, 74] },
-    { "id": "service", "type": "backend", "label": "Rust 服务", "sublabel": "任务编排 / 并发 / 日志", "pos": [350, 275], "size": [190, 74] },
-    { "id": "operations", "type": "backend", "label": "账号与项目操作", "sublabel": "凭据 / 项目管理 / 迁移", "pos": [665, 275], "size": [190, 74] },
-    { "id": "overleaf", "type": "cloud", "label": "Overleaf", "sublabel": "账号 / 项目 / 云端编译", "pos": [990, 275], "size": [210, 74] },
-    { "id": "storage", "type": "database", "label": "本地数据与密钥库", "sublabel": "账号 / 卡片 / 地址", "pos": [350, 500], "size": [190, 74] },
-    { "id": "automation", "type": "backend", "label": "独立浏览器会话", "sublabel": "登录 / 注册 / reCAPTCHA", "pos": [665, 500], "size": [210, 74] },
-    { "id": "extension", "type": "frontend", "label": "宿主机 Chrome 扩展", "sublabel": "当前档案内无感换号", "pos": [990, 500], "size": [210, 74] }
+    { "id": "agents", "type": "external", "label": "Agents", "sublabel": "Codex / Claude Code", "pos": [40, 130], "size": [190, 90] },
+    { "id": "skills", "type": "backend", "label": "overleaf-skills", "sublabel": "独立 Python CLI", "tag": "项目编辑 / 历史 / 编译", "pos": [315, 130], "size": [190, 90] },
+    { "id": "workbench", "type": "frontend", "label": "账号与项目工作台", "sublabel": "apps/web", "tag": "Tauri 桌面 / Docker Web", "pos": [40, 365], "size": [190, 90] },
+    { "id": "service", "type": "messagebus", "label": "Rust API 与任务调度", "sublabel": "service/api + runtime", "tag": "账号锁 / 并发 / 输入 / 日志", "pos": [315, 365], "size": [190, 90] },
+    { "id": "accounts", "type": "backend", "label": "账号与凭据", "sublabel": "accounts", "tag": "身份 / 订阅 / 改密 / Git", "pos": [590, 130], "size": [190, 90] },
+    { "id": "projects", "type": "backend", "label": "项目管理与换号", "sublabel": "projects + accounts/switch", "tag": "复制 / 下载 / 迁移 / 核验", "pos": [590, 365], "size": [190, 90] },
+    { "id": "registration", "type": "backend", "label": "注册与订阅状态机", "sublabel": "workflows/registration", "tag": "resources 提供卡片与地址", "pos": [590, 600], "size": [190, 90] },
+    { "id": "http", "type": "backend", "label": "共享 HTTP 客户端", "sublabel": "overleaf-api", "tag": "Cookie / CSRF / 项目接口", "pos": [865, 130], "size": [190, 90] },
+    { "id": "overleaf", "type": "cloud", "label": "Overleaf", "sublabel": "账号 / 订阅 / 项目", "tag": "云端编译 / PDF / ZIP", "pos": [1140, 365], "size": [190, 90] },
+    { "id": "storage", "type": "database", "label": "本地数据与密钥库", "sublabel": "storage", "tag": "JSON 元数据 / 敏感字段引用", "pos": [315, 600], "size": [190, 90] },
+    { "id": "automation", "type": "backend", "label": "独立 Chrome 会话", "sublabel": "browser / CDP", "tag": "登录恢复 / 注册 / 人工验证", "pos": [865, 600], "size": [190, 90] },
+    { "id": "extension", "type": "frontend", "label": "宿主机 Chrome 扩展", "sublabel": "chrome_extension", "tag": "写 Cookie / 刷新 / 回执", "pos": [865, 365], "size": [190, 90] }
   ],
   "connections": [
     { "id": "agent-cli", "from": "agents", "to": "skills", "label": "Python CLI" },
-    { "id": "skills-cloud", "from": "skills", "to": "overleaf", "label": "Cookie / Git", "fromSide": "right", "toSide": "top" },
+    { "id": "skills-cloud", "from": "skills", "to": "overleaf", "label": "Cookie / Git", "fromSide": "top", "toSide": "top" },
     { "id": "ui-api", "from": "workbench", "to": "service", "label": "HTTP / SSE", "variant": "emphasis" },
-    { "id": "task-dispatch", "from": "service", "to": "operations", "label": "任务执行", "variant": "emphasis" },
-    { "id": "remote-api", "from": "operations", "to": "overleaf", "label": "HTTPS", "variant": "emphasis" },
+    { "id": "account-dispatch", "from": "service", "to": "accounts", "label": "账号维护", "fromSide": "right", "toSide": "left" },
+    { "id": "project-dispatch", "from": "service", "to": "projects", "label": "项目与换号", "variant": "emphasis", "labelDy": 14 },
+    { "id": "registration-dispatch", "from": "service", "to": "registration", "label": "逐号任务", "fromSide": "right", "toSide": "left" },
+    { "id": "account-http", "from": "accounts", "to": "http", "label": "协议调用" },
+    { "id": "project-http", "from": "projects", "to": "http", "label": "项目读写 / 编译", "fromSide": "top", "toSide": "bottom" },
+    { "id": "remote-api", "from": "http", "to": "overleaf", "label": "HTTPS", "fromSide": "right", "toSide": "top", "labelSegment": 0 },
     { "id": "credentials-sync", "from": "service", "to": "skills", "label": "凭据同步" },
-    { "id": "persist-data", "from": "service", "to": "storage", "label": "读写 / 加密引用", "labelDy": 80 },
-    { "id": "browser-cdp", "from": "operations", "to": "automation", "label": "按需 CDP", "fromSide": "bottom", "toSide": "top" },
-    { "id": "extension-bridge", "from": "operations", "to": "extension", "label": "WebSocket", "fromSide": "bottom", "toSide": "left" },
-    { "id": "browser-session", "from": "extension", "to": "overleaf", "label": "浏览器会话" }
+    { "id": "persist-data", "from": "service", "to": "storage", "label": "提交锁 / 持久化", "labelDy": 80 },
+    { "id": "browser-cdp", "from": "registration", "to": "automation", "label": "CDP" },
+    { "id": "extension-bridge", "from": "projects", "to": "extension", "label": "WebSocket", "variant": "emphasis" },
+    { "id": "browser-session", "from": "extension", "to": "overleaf", "label": "当前档案", "variant": "emphasis" },
+    { "id": "temporary-session", "from": "automation", "to": "overleaf", "label": "临时档案", "fromSide": "right", "toSide": "bottom" }
   ],
   "cards": [
-    { "dot": "cyan", "title": "账号与资源", "items": ["导入导出、批量维护、Cookie 恢复、Git token 与改密", "订阅进度、试用资格、卡片与地址管理"] },
-    { "dot": "emerald", "title": "项目与写作", "items": ["项目管理、选择性迁移、切换浏览器与同步 skills", "agent 处理本地材料，Overleaf 编译并返回 PDF"] },
-    { "dot": "amber", "title": "共用运行逻辑", "items": ["桌面与 Docker 共用服务和 Web UI", "任务锁、并发队列、人工验证与运行日志"] }
+    { "dot": "cyan", "title": "同一工作台，两种部署", "items": ["Tauri 管理本机服务；Docker 承载相同 API 与 Web UI", "Chrome 扩展与 agent 在宿主机运行"] },
+    { "dot": "emerald", "title": "业务共用访问能力", "items": ["HTTP 处理账号与项目；需要交互时使用独立 Chrome", "注册由浏览器驱动，订阅结果通过会话接口核验"] },
+    { "dot": "amber", "title": "本地状态与 agent 联动", "items": ["元数据与密钥分离，账号提交在锁内重读后保存", "按需同步凭据；skills 独立通过 Cookie / Git 访问 Overleaf"] }
   ]
 }
