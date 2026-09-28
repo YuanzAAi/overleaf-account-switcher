@@ -63,6 +63,7 @@ pub struct AccountSummary {
     pub cookie: ExpiringSecretStatus,
     pub git_token: ExpiringSecretStatus,
     pub password: SecretPresence,
+    pub created_at: Option<i64>,
     pub last_login_at: Option<i64>,
 }
 
@@ -227,6 +228,7 @@ fn account_summary(
             present: password.present,
             masked_hint: password.masked_hint,
         },
+        created_at: timestamp(record.created_at),
         last_login_at: timestamp(record.last_login_at),
     }
 }

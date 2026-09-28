@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures_util::{stream, StreamExt};
 use overleaf_api::{parse_cookie_string, OVERLEAF_SESSION_COOKIE};
@@ -166,7 +167,7 @@ pub fn manual_cookie_import_candidate(
         record: AccountRecord {
             email: Some(email.into()),
             cookies: parse_cookie_string(cookie_input),
-            ..empty_record()
+            ..Default::default()
         },
     }
 }
@@ -319,41 +320,17 @@ fn apply_account_import_internal(
             candidate.alias_hint.as_deref(),
             candidate.record.email.as_deref().unwrap_or_default(),
         );
-        let decision = if let Some(email) = candidate.record.email.as_deref() {
-            if let Some(existing_alias) = staged_document.duplicate_alias_by_email(email) {
-                skipped_duplicate_email_count += 1;
-                AccountImportDecision {
-                    requested_alias,
-                    resolved_alias: alias,
-                    email: candidate.record.email.clone(),
-                    status: AccountImportDecisionStatus::SkippedDuplicateEmail,
-                    existing_alias: Some(existing_alias.to_string()),
-                }
-            } else if staged_document.accounts.contains_key(&alias) {
-                alias_conflict_count += 1;
-                AccountImportDecision {
-                    requested_alias,
-                    resolved_alias: alias,
-                    email: candidate.record.email.clone(),
-                    status: AccountImportDecisionStatus::AliasConflict,
-                    existing_alias: None,
-                }
-            } else {
-                let mut record = candidate.record.clone();
-                if let Err(error) =
-                    persist_import_record_secrets(&mut record, &alias, backend, &mut journal)
-                {
-                    return Err(rollback_import_secret_error(journal, backend, error));
-                }
-                staged_document.accounts.insert(alias.clone(), record);
-                imported_count += 1;
-                AccountImportDecision {
-                    requested_alias,
-                    resolved_alias: alias,
-                    email: candidate.record.email.clone(),
-                    status: AccountImportDecisionStatus::Imported,
-                    existing_alias: None,
-                }
+        let existing_alias = email
+            .as_deref()
+            .and_then(|email| staged_document.duplicate_alias_by_email(email));
+        let decision = if let Some(existing_alias) = existing_alias {
+            skipped_duplicate_email_count += 1;
+            AccountImportDecision {
+                requested_alias,
+                resolved_alias: alias,
+                email,
+                status: AccountImportDecisionStatus::SkippedDuplicateEmail,
+                existing_alias: Some(existing_alias.to_string()),
             }
         } else if staged_document.accounts.contains_key(&alias) {
             alias_conflict_count += 1;
@@ -402,6 +379,17 @@ fn persist_import_record_secrets(
     backend: &(dyn SecretBackend + Send + Sync),
     journal: &mut AccountSecretWriteJournal,
 ) -> Result<(), AccountIoError> {
+    if !record
+        .created_at
+        .is_some_and(|timestamp| timestamp.is_finite() && timestamp > 0.0)
+    {
+        record.created_at = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64(),
+        );
+    }
     let password = record.password.clone();
     let cookies = record.cookies.clone();
     let git_token = record.git_token.clone();
@@ -838,29 +826,5 @@ impl From<AccountSecretStoreError> for AccountIoError {
                 Self::SecretWriteFailed { alias, category }
             }
         }
-    }
-}
-
-fn empty_record() -> AccountRecord {
-    AccountRecord {
-        cookie_refs: Default::default(),
-        password_ref: None,
-        git_token_ref: None,
-        cookies: Default::default(),
-        user_id: None,
-        email: None,
-        password: None,
-        cookie_expiry: None,
-        cookie_updated_at: None,
-        created_at: None,
-        last_login_at: None,
-        trial_days: None,
-        trial_started_at: None,
-        trial_expiry: None,
-        subscription_status: None,
-        subscription_label: None,
-        subscription_checked_at: None,
-        git_token: None,
-        git_token_expiry: None,
     }
 }
