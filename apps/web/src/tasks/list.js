@@ -168,12 +168,19 @@ export function renderTasks(tasks) {
     return;
   }
 
-  list.innerHTML = [
-    clientLogs.length ? runtimeClientLogBlock(clientLogs) : "",
-    ...orderedTaskItems.map((task) => runtimeTaskLogBlock(task, activeRegistrationBatches)),
-  ]
-    .filter(Boolean)
-    .join("");
+  const blocks = [];
+  let clientLogIndex = 0;
+  for (const task of orderedTaskItems) {
+    const start = clientLogIndex;
+    const timestamp = runtimeTaskTimestamp(task);
+    while (clientLogIndex < clientLogs.length && clientLogs[clientLogIndex].createdAt <= timestamp) {
+      clientLogIndex++;
+    }
+    if (clientLogIndex > start) blocks.push(runtimeClientLogBlock(clientLogs.slice(start, clientLogIndex)));
+    blocks.push(runtimeTaskLogBlock(task, activeRegistrationBatches));
+  }
+  if (clientLogIndex < clientLogs.length) blocks.push(runtimeClientLogBlock(clientLogs.slice(clientLogIndex)));
+  list.innerHTML = blocks.join("");
   list.querySelectorAll("[data-task-input-form]").forEach((form) => {
     const key = `${form.dataset.taskInputForm}:${form.dataset.taskInputKind}`;
     const values = inputValues.get(key);
@@ -194,10 +201,12 @@ export function renderTasks(tasks) {
       }
     });
   }
-  const focusId = state.runtimeLogFocusTaskId;
-  const focusBlock = focusId && list.querySelector(`[data-task-id="${CSS.escape(focusId)}"]`);
+  const focusId = state.runtimeLogFocusId;
+  const focusBlock = focusId && list
+    .querySelector(`[data-task-id="${CSS.escape(focusId)}"], [data-client-log-id="${CSS.escape(focusId)}"]`)
+    ?.closest(".runtime-task-block");
   if (focusBlock) {
-    state.runtimeLogFocusTaskId = "";
+    state.runtimeLogFocusId = "";
     state.runtimeLogStickToBottom = false;
     applyRuntimeLogCollapsed(false);
     list.scrollTop += focusBlock.getBoundingClientRect().bottom - list.getBoundingClientRect().bottom;
@@ -256,7 +265,7 @@ export function runtimeClientLogBlock(logs) {
     .slice(-12)
     .map(
       (log) => `
-    <div class="runtime-line${log.level === "error" ? " runtime-line-error" : ""}">
+    <div class="runtime-line${log.level === "error" ? " runtime-line-error" : ""}" data-client-log-id="${escapeAttr(log.id)}">
       <span class="runtime-time">${escapeHtml(new Date(log.createdAt).toLocaleTimeString())}</span>
       <span class="runtime-level">${escapeHtml(log.level)}</span>
       <span class="runtime-message"><strong>${escapeHtml(log.scope)}</strong> · ${escapeHtml(log.route)} · ${escapeHtml(log.message)}</span>

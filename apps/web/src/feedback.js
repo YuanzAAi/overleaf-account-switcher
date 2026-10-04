@@ -47,7 +47,7 @@ export function reportUiOperationFailure({
 
 export function reportUiOperationStart({ status, shortMessage, scope, route, message }) {
   setAccountAssistShortStatus(status, shortMessage);
-  recordClientRuntimeInfo({ scope, route, message });
+  recordClientRuntimeInfo({ scope, route, message }, { focus: true });
 }
 
 export function reportUiOperationSuccess({
@@ -125,16 +125,16 @@ export function recordClientRuntimeError({ scope, route, error }) {
   });
 }
 
-export function recordClientRuntimeInfo({ scope, route, message }) {
+export function recordClientRuntimeInfo({ scope, route, message }, options) {
   return recordClientRuntimeLog({
     level: "info",
     scope,
     route,
     message: sanitizeClientRuntimeMessage(message),
-  });
+  }, options);
 }
 
-export function recordClientRuntimeLog({ level, scope, route, message }) {
+export function recordClientRuntimeLog({ level, scope, route, message }, { focus = false } = {}) {
   const entry = {
     id: `client-log-${state.nextClientRuntimeLogId++}`,
     createdAt: Date.now(),
@@ -144,6 +144,7 @@ export function recordClientRuntimeLog({ level, scope, route, message }) {
     message: sanitizeClientRuntimeMessage(message || "-"),
   };
   state.clientRuntimeLogs = [...state.clientRuntimeLogs, entry].slice(-CLIENT_RUNTIME_LOG_LIMIT);
+  if (focus) state.runtimeLogFocusId = entry.id;
   renderTasks(state.tasks);
   return entry;
 }

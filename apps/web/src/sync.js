@@ -786,7 +786,7 @@ export async function syncTaskAfterRequest(taskId, response) {
 
 export async function postJson(path, payload, { focusTask = true } = {}) {
   const taskId = String(payload?.new_task_id || payload?.task_id || "");
-  if (focusTask && taskId) state.runtimeLogFocusTaskId = taskId;
+  if (focusTask && taskId) state.runtimeLogFocusId = taskId;
   let data;
   try {
     try {
@@ -798,7 +798,7 @@ export async function postJson(path, payload, { focusTask = true } = {}) {
     await syncTaskAfterRequest(taskId, data);
     return data;
   } finally {
-    if (focusTask && state.runtimeLogFocusTaskId === taskId) state.runtimeLogFocusTaskId = "";
+    if (focusTask && state.runtimeLogFocusId === taskId) state.runtimeLogFocusId = "";
   }
 }
 
