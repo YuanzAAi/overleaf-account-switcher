@@ -1240,19 +1240,11 @@ fn apply_account_candidates_report(
     candidates: Vec<AccountImportCandidate>,
     task_id: Option<&str>,
 ) -> Result<AccountImportReport, ApiResponse> {
-    // 身份验证期间可能有后台任务写入账号，提交时重新加载并在同一锁内去重。
-    let commit_lock = state.account_commit_lock();
-    let result = {
-        let _guard = commit_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        crate::account_io::import_account_candidates_in_store(
-            store,
-            &candidates,
-            state.secret_backend.as_ref(),
-        )
-    };
-    match result {
+    match crate::account_io::import_account_candidates_in_store(
+        store,
+        &candidates,
+        state.secret_backend.as_ref(),
+    ) {
         Ok(report) => Ok(report),
         Err(error) => {
             fail_tracked_task(state, task_id, account_io_error_message(&error));

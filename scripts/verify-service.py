@@ -23,7 +23,7 @@ def main():
         try:
             config = request("/config")
             break
-        except (urllib.error.URLError, TimeoutError):
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
             if attempt == 59:
                 raise
             time.sleep(1)
@@ -54,7 +54,7 @@ def main():
             "json": json.dumps({"accounts": records}),
             "refresh_session_metadata": False,
             "fetch_git_token": False,
-        })["import"]
+        })
 
     assert import_accounts(accounts)["imported_count"] == len(accounts)
 

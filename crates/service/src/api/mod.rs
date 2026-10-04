@@ -3792,19 +3792,12 @@ fn update_local_password_response(state: &mut ApiState, body: &str) -> ApiRespon
         return response;
     }
 
-    let commit_lock = state.account_commit_lock();
-    let result = {
-        let _guard = commit_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        update_local_passwords_in_store_with_backend(
-            &store,
-            &request.aliases,
-            &request.passwords,
-            state.secret_backend.as_ref(),
-        )
-    };
-    match result {
+    match update_local_passwords_in_store_with_backend(
+        &store,
+        &request.aliases,
+        &request.passwords,
+        state.secret_backend.as_ref(),
+    ) {
         Ok(report) => {
             complete_tracked_task(state, task_id.as_deref(), "本地账号密码更新完成", &report);
             json_response(200, &report)
@@ -4036,14 +4029,7 @@ fn remove_accounts_response(state: &mut ApiState, body: &str) -> ApiResponse {
         return response;
     }
 
-    let commit_lock = state.account_commit_lock();
-    let result = {
-        let _guard = commit_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        remove_accounts_locally_in_store(&store, &request.aliases)
-    };
-    match result {
+    match remove_accounts_locally_in_store(&store, &request.aliases) {
         Ok(report) => {
             complete_tracked_task(state, task_id.as_deref(), "本地账号移除完成", &report);
             json_response(200, &report)
