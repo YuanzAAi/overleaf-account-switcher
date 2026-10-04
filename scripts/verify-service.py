@@ -33,6 +33,8 @@ def main():
         page = response.read().decode()
     for field in ("manual-cookie-aliases", "manual-cookie-emails", "manual-cookie-entries"):
         assert field in page, f"missing UI field: {field}"
+    assert request("/runtime/updates/prepare", {})["ready"] is True
+    assert request("/runtime/updates/cancel", {})["ready"] is False
 
     aliases = [
         "Case", "case", "a b", "a_x20_b", "a:b", "a_x3A_b", "under_score",
@@ -97,8 +99,6 @@ def main():
         "cleanup_remote_projects": False, "confirm_local_only": True,
     })
     assert request("/accounts") == []
-    assert request("/runtime/updates/prepare", {})["ready"] is True
-    assert request("/runtime/updates/cancel", {})["ready"] is False
     print("PASS: startup, UI assets, native credentials, import/export, password updates, email deduplication, concurrent imports, local removal, update preparation")
 
 
