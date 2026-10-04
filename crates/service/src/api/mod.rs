@@ -923,6 +923,7 @@ struct AccountManualCookieImportRequest {
 struct AccountManualCookieImportEntryRequest {
     #[serde(default)]
     alias: Option<String>,
+    #[serde(default)]
     email: String,
     cookie: String,
 }

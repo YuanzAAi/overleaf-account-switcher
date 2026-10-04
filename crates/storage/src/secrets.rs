@@ -184,7 +184,7 @@ fn system_keyring_set_password(
     reference: &SecretReference,
     value: &str,
 ) -> Result<(), SecretBackendError> {
-    let entry = keyring::Entry::new(service, &reference.key)
+    let entry = system_keyring_entry(service, reference)
         .map_err(|error| keyring_operation_error("open", &reference.key, error))?;
     entry
         .set_password(value)
@@ -195,7 +195,7 @@ fn system_keyring_get_password(
     service: &str,
     reference: &SecretReference,
 ) -> Result<String, SecretBackendError> {
-    let entry = keyring::Entry::new(service, &reference.key)
+    let entry = system_keyring_entry(service, reference)
         .map_err(|error| keyring_operation_error("open", &reference.key, error))?;
     entry
         .get_password()
@@ -206,11 +206,52 @@ fn system_keyring_delete_password(
     service: &str,
     reference: &SecretReference,
 ) -> Result<(), SecretBackendError> {
-    let entry = keyring::Entry::new(service, &reference.key)
+    let entry = system_keyring_entry(service, reference)
         .map_err(|error| keyring_operation_error("open", &reference.key, error))?;
     match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(keyring_operation_error("delete", &reference.key, error)),
+    }
+}
+
+fn system_keyring_entry(
+    service: &str,
+    reference: &SecretReference,
+) -> keyring::Result<keyring::Entry> {
+    #[cfg(not(windows))]
+    {
+        keyring::Entry::new(service, &reference.key)
+    }
+    #[cfg(windows)]
+    {
+        // Windows 的凭据目标名不区分大小写，按字节编码后再交给密钥库。
+        let encoded: String = reference
+            .key
+            .bytes()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let target = format!("ref:{encoded}.{service}");
+        let entry = keyring::Entry::new_with_target(&target, service, &reference.key)?;
+        static MIGRATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = MIGRATION_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match entry.get_attributes() {
+            Ok(_) => return Ok(entry),
+            Err(keyring::Error::NoEntry) => {}
+            Err(error) => return Err(error),
+        }
+        let legacy = keyring::Entry::new(service, &reference.key)?;
+        match legacy.get_attributes() {
+            // 只迁移精确归属的旧凭据，避免将另一个大小写别名的值带过来。
+            Ok(attributes) if attributes.get("username") == Some(&reference.key) => {
+                entry.set_password(&legacy.get_password()?)?;
+                legacy.delete_credential()?;
+            }
+            Ok(_) | Err(keyring::Error::NoEntry) => {}
+            Err(error) => return Err(error),
+        }
+        Ok(entry)
     }
 }
 

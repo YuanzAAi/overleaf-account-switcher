@@ -850,10 +850,10 @@ export function accountAssistConfig(tool) {
         {
           id: "cookie-import",
           label: "Cookie 登录",
-          detail: "按别名、邮箱和 Cookie（空格分隔）批量导入",
+          detail: "Cookie 登录与批量导入",
           formId: "manual-cookie-form",
           focusId: "manual-cookie-entries",
-          focusIds: ["manual-cookie-entries"],
+          focusIds: ["manual-cookie-aliases", "manual-cookie-emails", "manual-cookie-entries"],
           usesAccountSelection: false,
         },
         {

@@ -194,20 +194,34 @@ pub async fn validate_manual_cookie_import_candidates(
                 .cookies
                 .get(OVERLEAF_SESSION_COOKIE)
                 .is_some_and(|value| !value.trim().is_empty());
-            let error = if expected_email.is_empty() || !has_session_cookie {
-                Some(AccountSessionError::InvalidSessionCookie {
+            let identity = if !has_session_cookie {
+                Err(AccountSessionError::InvalidSessionCookie {
                     alias: alias.clone(),
                 })
             } else {
                 validator
-                    .validate(&alias, Some(&expected_email), &candidate.record.cookies)
+                    .validate(
+                        &alias,
+                        (!expected_email.is_empty()).then_some(expected_email.as_str()),
+                        &candidate.record.cookies,
+                    )
                     .await
-                    .err()
+            };
+            let identity = identity.and_then(|user| {
+                user.email
+                    .filter(|email| !email.trim().is_empty())
+                    .ok_or_else(|| AccountSessionError::InvalidSessionCookie {
+                        alias: alias.clone(),
+                    })
+            });
+            let (email, error) = match identity {
+                Ok(email) => (email, None),
+                Err(error) => (expected_email, Some(error)),
             };
             ManualCookieValidationItem {
                 index,
-                alias,
-                email: expected_email,
+                alias: make_alias(candidate.alias_hint.as_deref(), &email),
+                email,
                 valid: error.is_none(),
                 error,
             }

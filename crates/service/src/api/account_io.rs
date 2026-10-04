@@ -230,16 +230,14 @@ pub(super) fn import_manual_cookie_accounts_response(
             );
         }
     }
-    let valid_indices = validation
-        .items
-        .iter()
-        .filter(|item| item.valid)
-        .map(|item| item.index)
-        .collect::<BTreeSet<_>>();
     let candidates = candidates
         .into_iter()
         .enumerate()
-        .filter_map(|(index, candidate)| valid_indices.contains(&index).then_some(candidate))
+        .filter_map(|(index, mut candidate)| {
+            let item = validation.items.get(index).filter(|item| item.valid)?;
+            candidate.record.email = Some(item.email.clone());
+            Some(candidate)
+        })
         .collect::<Vec<_>>();
     if let Some(task_id) = task_id.as_deref() {
         let _ = state.tasks.append_log(
@@ -423,14 +421,6 @@ fn manual_cookie_import_candidates_from_entries(
         let alias_hint = normalized_optional_text(entry.alias);
         let email = entry.email.trim().to_string();
         let cookie = entry.cookie.trim().to_string();
-        if email.is_empty() {
-            return Err(json_response(
-                400,
-                &ApiErrorBody {
-                    error: format!("missing email for entry {entry_number}"),
-                },
-            ));
-        }
         if cookie.is_empty() {
             return Err(json_response(
                 400,

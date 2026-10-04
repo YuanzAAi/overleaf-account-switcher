@@ -525,17 +525,27 @@
 
           <form id="manual-cookie-form" class="stack-form">
             <label>
-              手动导入 Cookie
-              <textarea id="manual-cookie-entries" name="entries" rows="5" spellcheck="false" placeholder="每行一个账号：别名 邮箱 Cookie（空格分隔）"></textarea>
+              别名
+              <input id="manual-cookie-aliases" name="aliases" type="text" placeholder="留空使用邮箱前缀；批量：别名1,,别名3" autocomplete="off">
             </label>
-            <label class="check-row">
-              <input id="manual-cookie-refresh" name="refresh_session_metadata" type="checkbox" checked>
-              刷新状态
+            <label>
+              邮箱
+              <input id="manual-cookie-emails" name="emails" type="text" placeholder="留空自动识别；多个邮箱用逗号分隔" autocomplete="off" spellcheck="false">
             </label>
-            <label class="check-row">
-              <input id="manual-cookie-git-token" name="fetch_git_token" type="checkbox" checked>
-              Git 令牌
+            <label>
+              Cookie
+              <textarea id="manual-cookie-entries" name="entries" rows="4" required spellcheck="false" placeholder="每行一个账号的 Cookie 或 overleaf_session2 值"></textarea>
             </label>
+            <div class="import-post-actions" aria-label="导入后动作">
+              <label class="check-row">
+                <input id="manual-cookie-refresh" name="refresh_session_metadata" type="checkbox" checked>
+                刷新状态
+              </label>
+              <label class="check-row">
+                <input id="manual-cookie-git-token" name="fetch_git_token" type="checkbox" checked>
+                Git 令牌
+              </label>
+            </div>
             <button id="manual-cookie-submit" type="submit">导入 Cookie</button>
           </form>
 

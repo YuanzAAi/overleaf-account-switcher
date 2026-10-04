@@ -145,6 +145,8 @@ export function chooseWebImportFiles(event) {
 export async function importManualCookieAccounts(event) {
   event.preventDefault();
   const entriesInput = document.getElementById("manual-cookie-entries");
+  const inputs = ["manual-cookie-aliases", "manual-cookie-emails", "manual-cookie-entries"]
+    .map((id) => document.getElementById(id));
   const status = document.getElementById("io-status");
   const submit = document.getElementById("manual-cookie-submit");
   const modeId = "cookie-import";
@@ -170,12 +172,13 @@ export async function importManualCookieAccounts(event) {
     message: "已提交 Cookie 登录任务。",
   });
 
-  let submittedEntriesText = "";
+  let submittedValues = [];
   let submittedTaskId = "";
   const ownsForm = () => !submittedTaskId || submit.dataset.taskId === submittedTaskId;
+  const inputsUnchanged = () => inputs.every((input, index) => input.value === submittedValues[index]);
   try {
-    submittedEntriesText = entriesInput.value;
-    const entries = parseManualCookieEntries(submittedEntriesText);
+    submittedValues = inputs.map((input) => input.value);
+    const entries = parseManualCookieEntries(submittedValues[2], submittedValues[0], submittedValues[1]);
     const postActions = accountImportPostActions();
     const refreshSessionMetadata =
       postActions.includes("refresh_session_metadata") &&
@@ -203,19 +206,14 @@ export async function importManualCookieAccounts(event) {
       const summary = `${Number(importReport.imported_count || 0)} 个已导入，${Number(importReport.skipped_duplicate_email_count || 0)} 个重复邮箱已跳过，${Number(importReport.alias_conflict_count || 0)} 个别名冲突${validationSummary}${postActionSummary}`;
       const publishReport = () => {
         const currentStatus = ownsForm() ? accountAssistStatusForMode("io", modeId, status) : null;
-        const inputUnchanged = entriesInput.value === submittedEntriesText;
+        const inputUnchanged = inputsUnchanged();
         if (currentStatus && validationFailures.length > 0 && inputUnchanged) {
-          entriesInput.value = validationFailures
-            .map((item) => {
-              const entry = entries[Number(item.index)];
-              if (!entry) return "";
-              const cookie = String(entry.cookie || "").replace(/^overleaf_session2\s*=\s*/i, "");
-              return `${entry.alias ? `${entry.alias} ` : ""}${entry.email} ${cookie}`;
-            })
-            .filter(Boolean)
-            .join("\n");
+          const failed = validationFailures.map((item) => entries[Number(item.index)]).filter(Boolean);
+          inputs[0].value = failed.map((entry) => entry.alias || "").join(",");
+          inputs[1].value = failed.map((entry) => entry.email || "").join(",");
+          entriesInput.value = failed.map((entry) => entry.cookie).join("\n");
         } else if (currentStatus && !failedPhase && !hasPostActionFailure && inputUnchanged) {
-          entriesInput.value = "";
+          inputs.forEach((input) => { input.value = ""; });
         }
         if (validationFailures.length > 0) {
           reportUiOperationSuccess({
@@ -290,7 +288,7 @@ export async function importManualCookieAccounts(event) {
       error.kind === "invalid_session_cookie" &&
       ownsForm() &&
       accountAssistModeIsActive("io", modeId) &&
-      entriesInput.value === submittedEntriesText
+      inputsUnchanged()
     ) {
       entriesInput.value = "";
       entriesInput.focus();
@@ -725,39 +723,28 @@ export function exportDeliveryStatus(deliveries, count) {
   return `已保存 ${desktopCount} 个，已准备下载 ${browserCount} 个`;
 }
 
-export function parseManualCookieEntries(text) {
+export function parseManualCookieEntries(text, aliases = "", emails = "") {
   const lines = String(text || "")
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (!lines.length) {
-    throw new Error("missing manual cookie entries");
+    .map((line) => line.trim());
+  const [aliasValues, emailValues] = [aliases, emails]
+    .map((value) => String(value || "").split(/[,，]/).map((item) => item.trim()));
+  const entries = [];
+  const count = Math.max(lines.length, aliasValues.length, emailValues.length);
+  for (let index = 0; index < count; index++) {
+    let alias = aliasValues[index] || "";
+    let email = emailValues[index] || "";
+    let cookie = lines[index] || "";
+    if (!alias && !email && !cookie) continue;
+    if (!cookie) throw new Error(`第 ${index + 1} 个账号缺少 Cookie`);
+    const combined = !alias && !email && cookie.match(/^(?:(\S+)\s+)?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\s+(.+)$/i);
+    if (combined) {
+      [, alias = "", email, cookie] = combined;
+    }
+    entries.push({ alias: alias || null, email, cookie });
   }
-
-  return lines.map((line, index) => {
-    const emailMatch = line.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-    if (!emailMatch) {
-      throw new Error(`第 ${index + 1} 行需要包含邮箱和 Cookie（空格分隔）`);
-    }
-    const email = emailMatch[0];
-    const prefix = line
-      .slice(0, emailMatch.index)
-      .replace(/[|;,\s]+$/g, "")
-      .trim();
-    const alias = prefix.split(/[|;,\s]+/).filter(Boolean)[0] || "";
-    const suffix = line.slice((emailMatch.index || 0) + email.length).replace(/^[|;,\s]+/, "");
-    const cookieToken = suffix.split(/[|;,\s]+/).filter(Boolean)[0] || "";
-    const cookieValue = cookieToken.replace(/^overleaf_session2\s*=\s*/i, "");
-    if (!cookieValue) {
-      throw new Error(`第 ${index + 1} 行需要包含邮箱和 Cookie（空格分隔）`);
-    }
-    const cookie = `overleaf_session2=${cookieValue}`;
-    return {
-      alias: alias || null,
-      email,
-      cookie,
-    };
-  });
+  if (!entries.length) throw new Error("请填写 Cookie");
+  return entries;
 }
 
 export function importPostActionSummary(report, options = {}) {

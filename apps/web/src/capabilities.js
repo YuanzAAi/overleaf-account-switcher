@@ -482,6 +482,8 @@ export function renderAccountIoCapabilityControls(capabilities) {
   setButtonCapability("import-submit", jsonImportSupported);
   if (state.importingFiles) document.getElementById("import-submit").disabled = true;
   setInputCapability("manual-cookie-entries", manualCookieSupported);
+  setInputCapability("manual-cookie-aliases", manualCookieSupported);
+  setInputCapability("manual-cookie-emails", manualCookieSupported);
   setButtonCapability("manual-cookie-submit", manualCookieSupported);
   setCheckboxCapability("import-refresh", postActions.includes("refresh_session_metadata"));
   setCheckboxCapability("import-git-token", postActions.includes("fetch_git_token"));
