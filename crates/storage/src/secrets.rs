@@ -274,19 +274,43 @@ fn keyring_operation_error(
 }
 
 pub fn secret_key_component(value: &str) -> String {
-    let mut output = String::new();
-    for byte in value.trim().as_bytes() {
-        let allowed = byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@');
-        if allowed {
-            output.push(*byte as char);
-        } else {
-            output.push_str(&format!("_x{byte:02X}_"));
-        }
+    // 独立命名空间与逐字节编码同时避免旧转义歧义、大小写折叠和 Unicode 归一化。
+    let mut output = String::from("~");
+    for byte in value.as_bytes() {
+        output.push_str(&format!("{byte:02x}"));
     }
-    if output.is_empty() {
-        "unknown".to_string()
-    } else {
-        output
+    output
+}
+
+pub fn legacy_account_secret_key(
+    alias: &str,
+    category: &str,
+    cookie_name: Option<&str>,
+) -> Option<String> {
+    fn unambiguous(value: &str) -> bool {
+        !value.is_empty()
+            && value != "unknown"
+            && value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@')
+            })
+            && !value.as_bytes().windows(5).any(|part| {
+                part[0] == b'_'
+                    && part[1] == b'x'
+                    && part[2].is_ascii_hexdigit()
+                    && part[3].is_ascii_hexdigit()
+                    && part[4] == b'_'
+            })
+    }
+    // 旧转义键无法区分原始别名与转义字面量，不能猜测其凭据归属。
+    if !unambiguous(alias) {
+        return None;
+    }
+    match (category, cookie_name) {
+        ("password" | "git_token", None) => Some(format!("account:{alias}:{category}")),
+        ("cookie", Some(name)) if unambiguous(name) => {
+            Some(format!("account:{alias}:cookie:{name}"))
+        }
+        _ => None,
     }
 }
 

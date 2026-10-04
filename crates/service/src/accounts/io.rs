@@ -448,19 +448,19 @@ pub fn import_accounts_from_json_file_with_backend(
     backend: &(dyn SecretBackend + Send + Sync),
 ) -> Result<AccountImportReport, AccountIoError> {
     let input = fs::read_to_string(import_path).map_err(AccountIoError::from_io)?;
-    let mut document = store.load().map_err(AccountIoError::from_io)?;
     let candidates = parse_account_import_json(&input)?;
-    let (report, journal) = apply_account_import_internal(&mut document, &candidates, backend)?;
+    import_account_candidates_in_store(store, &candidates, backend)
+}
+
+pub(crate) fn import_account_candidates_in_store(
+    store: &AccountStore,
+    candidates: &[AccountImportCandidate],
+    backend: &(dyn SecretBackend + Send + Sync),
+) -> Result<AccountImportReport, AccountIoError> {
+    let mut document = store.load().map_err(AccountIoError::from_io)?;
+    let (report, journal) = apply_account_import_internal(&mut document, candidates, backend)?;
     if report.imported_count > 0 {
-        match store.save(&document) {
-            Ok(()) => {}
-            Err(error) => {
-                return Err(match journal.rollback(backend) {
-                    Ok(()) => AccountIoError::from_io(error),
-                    Err(rollback_error) => AccountIoError::from(rollback_error),
-                });
-            }
-        }
+        journal.commit(store, &document, backend, AccountIoError::from_io)?;
     }
     Ok(report)
 }

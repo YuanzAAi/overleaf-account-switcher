@@ -114,6 +114,21 @@ jobs:
           }
       - if: runner.os == 'macOS'
         run: bash scripts/package-macos.sh '${{ matrix.target }}'
+      - name: Verify native credentials (Windows)
+        if: runner.os == 'Windows'
+        run: cargo test --locked --release -p overleaf-service --test credential_isolation -- --ignored --nocapture
+      - name: Verify native credentials (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          previous=$(security default-keychain -d user | tr -d '"' | xargs)
+          keychain="$RUNNER_TEMP/credential-check.keychain-db"
+          password=$(uuidgen)
+          security create-keychain -p "$password" "$keychain"
+          trap 'security default-keychain -d user -s "$previous"; security delete-keychain "$keychain"' EXIT
+          security unlock-keychain -p "$password" "$keychain"
+          security default-keychain -d user -s "$keychain"
+          cargo test --locked --release --target '${{ matrix.target }}' -p overleaf-service --test credential_isolation -- --ignored --nocapture
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: desktop-${{ matrix.name }}
@@ -171,6 +186,17 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha,scope=docker-${{ matrix.arch }}
           cache-to: type=gha,scope=docker-${{ matrix.arch }},mode=max
+      - name: Verify container credentials and service
+        if: needs.prepare.outputs.publish == 'true'
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+        run: |
+          trap 'docker rm -f overleaf-credential-check >/dev/null 2>&1 || true' EXIT
+          docker run -d --name overleaf-credential-check \
+            --tmpfs /data:uid=1000,gid=1000 --tmpfs /run/secrets:uid=1000,gid=1000 \
+            -p 127.0.0.1:18765:8765 --entrypoint /bin/sh "$IMAGE" \
+            -c 'printf %s isolated-check > /run/secrets/keyring_password; exec /usr/local/bin/entrypoint.sh'
+          python3 scripts/verify-service.py http://127.0.0.1:18765
       - name: Export image digest
         if: needs.prepare.outputs.publish == 'true'
         env:
@@ -269,3 +295,60 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           gh release upload "$RELEASE_TAG" release/*.exe release/*-portable.zip --clobber
+  verify-macos-release:
+    name: Verify released macOS (${{ matrix.arch }})
+    needs: [prepare, release]
+    if: needs.prepare.outputs.publish == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+          - os: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Download and exercise released application
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          stage="$RUNNER_TEMP/overleaf-release-check"
+          mkdir -p "$stage"
+          archive="overleaf-macos-$ARCH-portable.zip"
+          gh release download "$RELEASE_TAG" --pattern "$archive" --dir "$stage"
+          digest=$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq ".assets[] | select(.name == \"$archive\") | .digest")
+          test "sha256:$(shasum -a 256 "$stage/$archive" | cut -d ' ' -f 1)" = "$digest"
+          ditto -x -k "$stage/$archive" "$stage"
+          app="$stage/Overleaf 账号控制台.app"
+          codesign --verify --deep --strict "$app"
+          test -x "$app/Contents/MacOS/overleaf-service-api"
+          test -f "$app/Contents/MacOS/chrome_extension/manifest.json"
+          previous=$(security default-keychain -d user | tr -d '"' | xargs)
+          keychain="$stage/credentials.keychain-db"
+          password=$(uuidgen)
+          security create-keychain -p "$password" "$keychain"
+          desktop_pid=''
+          cleanup() {
+            if [[ -n "$desktop_pid" ]]; then
+              pkill -P "$desktop_pid" 2>/dev/null || true
+              kill "$desktop_pid" 2>/dev/null || true
+              wait "$desktop_pid" 2>/dev/null || true
+            fi
+            security default-keychain -d user -s "$previous"
+            security delete-keychain "$keychain"
+          }
+          trap cleanup EXIT
+          security unlock-keychain -p "$password" "$keychain"
+          security default-keychain -d user -s "$keychain"
+          export OVERLEAF_SWITCHER_DATA_DIR="$stage/data"
+          export OVERLEAF_SWITCHER_TMP_DIR="$stage/tmp"
+          "$app/Contents/MacOS/overleaf-desktop" > "$stage/desktop.log" 2>&1 &
+          desktop_pid=$!
+          python3 scripts/verify-service.py http://127.0.0.1:8765
+          kill -0 "$desktop_pid"

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use overleaf_storage::secrets::legacy_account_secret_key;
 use overleaf_storage::{
     account_cookie_secret_key, account_git_token_secret_key, account_password_secret_key,
     AccountRecord, AccountStore, AccountsDocument, SecretBackend, SecretBackendError,
@@ -131,10 +132,7 @@ pub(crate) fn write_account_password_secret_tracked(
     backend: &dyn SecretBackend,
     journal: &mut AccountSecretWriteJournal,
 ) -> Result<(), AccountSecretStoreError> {
-    let reference = record
-        .password_ref
-        .clone()
-        .unwrap_or_else(|| SecretReference::new("password", account_password_secret_key(alias)));
+    let reference = SecretReference::new("password", account_password_secret_key(alias));
     write_secret_tracked(alias, "password", backend, &reference, password, journal)?;
     record.password_ref = Some(reference);
     record.password = None;
@@ -168,13 +166,8 @@ pub(crate) fn write_account_cookie_secrets_tracked(
         if cookie_value.trim().is_empty() {
             continue;
         }
-        let reference = record
-            .cookie_refs
-            .get(cookie_name)
-            .cloned()
-            .unwrap_or_else(|| {
-                SecretReference::new("cookie", account_cookie_secret_key(alias, cookie_name))
-            });
+        let reference =
+            SecretReference::new("cookie", account_cookie_secret_key(alias, cookie_name));
         write_secret_tracked(alias, "cookie", backend, &reference, cookie_value, journal)?;
         record.cookie_refs.insert(cookie_name.clone(), reference);
     }
@@ -205,10 +198,7 @@ pub(crate) fn write_account_git_token_secret_tracked(
     backend: &dyn SecretBackend,
     journal: &mut AccountSecretWriteJournal,
 ) -> Result<(), AccountSecretStoreError> {
-    let reference = record
-        .git_token_ref
-        .clone()
-        .unwrap_or_else(|| SecretReference::new("git_token", account_git_token_secret_key(alias)));
+    let reference = SecretReference::new("git_token", account_git_token_secret_key(alias));
     write_secret_tracked(alias, "git_token", backend, &reference, token, journal)?;
     record.git_token_ref = Some(reference);
     record.git_token = None;
@@ -229,7 +219,14 @@ pub fn resolve_account_cookies(
 
     let mut cookies = BTreeMap::new();
     for (cookie_name, reference) in &record.cookie_refs {
-        let value = read_secret(alias, "cookie", backend, reference)?;
+        let value = read_secret(
+            alias,
+            "cookie",
+            backend,
+            reference,
+            Some(cookie_name),
+            false,
+        )?;
         cookies.insert(cookie_name.clone(), value);
     }
     Ok(cookies)
@@ -249,7 +246,7 @@ pub fn resolve_account_cookies_for_recovery(
 
     let mut cookies = BTreeMap::new();
     for (cookie_name, reference) in &record.cookie_refs {
-        let value = read_secret_for_recovery(alias, "cookie", backend, reference)?;
+        let value = read_secret(alias, "cookie", backend, reference, Some(cookie_name), true)?;
         cookies.insert(cookie_name.clone(), value);
     }
     Ok(cookies)
@@ -269,7 +266,14 @@ pub fn read_account_cookie_secret(
                 alias: alias.to_string(),
                 category: "cookie",
             })?;
-    read_secret(alias, "cookie", backend, reference)
+    read_secret(
+        alias,
+        "cookie",
+        backend,
+        reference,
+        Some(cookie_name),
+        false,
+    )
 }
 
 pub fn read_account_cookie_secret_for_recovery(
@@ -286,7 +290,7 @@ pub fn read_account_cookie_secret_for_recovery(
                 alias: alias.to_string(),
                 category: "cookie",
             })?;
-    read_secret_for_recovery(alias, "cookie", backend, reference)
+    read_secret(alias, "cookie", backend, reference, Some(cookie_name), true)
 }
 
 pub fn read_account_password_secret(
@@ -302,7 +306,7 @@ pub fn read_account_password_secret(
                 alias: alias.to_string(),
                 category: "password",
             })?;
-    read_secret(alias, "password", backend, reference)
+    read_secret(alias, "password", backend, reference, None, false)
 }
 
 pub fn read_account_password_secret_for_recovery(
@@ -318,7 +322,7 @@ pub fn read_account_password_secret_for_recovery(
                 alias: alias.to_string(),
                 category: "password",
             })?;
-    read_secret_for_recovery(alias, "password", backend, reference)
+    read_secret(alias, "password", backend, reference, None, true)
 }
 
 pub fn read_account_git_token_secret(
@@ -334,7 +338,7 @@ pub fn read_account_git_token_secret(
                 alias: alias.to_string(),
                 category: "git_token",
             })?;
-    read_secret(alias, "git_token", backend, reference)
+    read_secret(alias, "git_token", backend, reference, None, false)
 }
 
 pub fn read_account_git_token_secret_for_recovery(
@@ -350,7 +354,7 @@ pub fn read_account_git_token_secret_for_recovery(
                 alias: alias.to_string(),
                 category: "git_token",
             })?;
-    read_secret_for_recovery(alias, "git_token", backend, reference)
+    read_secret(alias, "git_token", backend, reference, None, true)
 }
 
 fn write_secret(
@@ -385,17 +389,30 @@ fn read_secret(
     category: &'static str,
     backend: &dyn SecretBackend,
     reference: &SecretReference,
+    cookie_name: Option<&str>,
+    recover_missing: bool,
 ) -> Result<String, AccountSecretStoreError> {
-    normalize_secret_read(backend.read_secret(reference), alias, category, false)
-}
-
-fn read_secret_for_recovery(
-    alias: &str,
-    category: &'static str,
-    backend: &dyn SecretBackend,
-    reference: &SecretReference,
-) -> Result<String, AccountSecretStoreError> {
-    normalize_secret_read(backend.read_secret(reference), alias, category, true)
+    let key = match cookie_name {
+        Some(name) => account_cookie_secret_key(alias, name),
+        None if category == "password" => account_password_secret_key(alias),
+        None => account_git_token_secret_key(alias),
+    };
+    if reference.category != category
+        || (reference.key != key
+            && legacy_account_secret_key(alias, category, cookie_name).as_deref()
+                != Some(reference.key.as_str()))
+    {
+        return Err(AccountSecretStoreError::Missing {
+            alias: alias.to_string(),
+            category,
+        });
+    }
+    normalize_secret_read(
+        backend.read_secret(reference),
+        alias,
+        category,
+        recover_missing,
+    )
 }
 
 fn normalize_secret_read(

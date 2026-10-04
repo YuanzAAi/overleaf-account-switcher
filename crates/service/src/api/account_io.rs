@@ -249,7 +249,7 @@ pub(super) fn import_manual_cookie_accounts_response(
             ),
         );
     }
-    match apply_account_candidates_report(state, &store, document, candidates, task_id.as_deref()) {
+    match apply_account_candidates_report(state, &store, candidates, task_id.as_deref()) {
         Ok(import) => finish_account_import_seed_response(
             state,
             &store,
@@ -1231,35 +1231,34 @@ fn import_account_candidates_report(
     let aliases = import_candidate_lock_aliases(&document, &candidates);
     start_alias_batch_task(state, task_id, task_name, &aliases)?;
 
-    apply_account_candidates_report(state, store, document, candidates, task_id)
+    apply_account_candidates_report(state, store, candidates, task_id)
 }
 
 fn apply_account_candidates_report(
     state: &mut ApiState,
     store: &AccountStore,
-    mut document: overleaf_storage::AccountsDocument,
     candidates: Vec<AccountImportCandidate>,
     task_id: Option<&str>,
 ) -> Result<AccountImportReport, ApiResponse> {
-    let report = match apply_account_import_with_backend(
-        &mut document,
-        &candidates,
-        state.secret_backend.as_ref(),
-    ) {
-        Ok(report) => report,
+    // 身份验证期间可能有后台任务写入账号，提交时重新加载并在同一锁内去重。
+    let commit_lock = state.account_commit_lock();
+    let result = {
+        let _guard = commit_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        crate::account_io::import_account_candidates_in_store(
+            store,
+            &candidates,
+            state.secret_backend.as_ref(),
+        )
+    };
+    match result {
+        Ok(report) => Ok(report),
         Err(error) => {
             fail_tracked_task(state, task_id, account_io_error_message(&error));
-            return Err(account_io_error_response(error));
-        }
-    };
-    if report.imported_count > 0 {
-        if let Err(error) = store.save(&document) {
-            fail_tracked_task(state, task_id, error.to_string());
-            return Err(io_error_response(error));
+            Err(account_io_error_response(error))
         }
     }
-
-    Ok(report)
 }
 
 fn import_candidate_lock_aliases(

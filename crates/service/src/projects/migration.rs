@@ -1,5 +1,6 @@
-use std::collections::BTreeSet;
-use std::time::Duration;
+use std::collections::{BTreeSet, VecDeque};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use overleaf_api::project_api::{
     ProjectApiClient, ProjectApiError, ProjectApiStatusKind, ProjectApiTransport, ProjectTokenSet,
@@ -19,6 +20,8 @@ use serde::Serialize;
 use crate::account_secrets::{resolve_account_cookies, AccountSecretStoreError};
 
 const MIGRATION_MAX_RETRIES: u32 = 5;
+const JOIN_REQUEST_LIMIT: usize = 10;
+const JOIN_REQUEST_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectMigrationProgressLevel {
@@ -410,6 +413,7 @@ where
         format!("项目迁移准备完成：共 {} 个项目", plans.len()),
     );
     let mut existing_owned_names = active_owned_project_names(&target_projects);
+    let join_requests = Mutex::new([VecDeque::new(), VecDeque::new()]);
     let mut evidence = ProjectMigrationEvidence {
         target_projects,
         original_accessible: BTreeSet::new(),
@@ -455,6 +459,7 @@ where
             &mut report,
             MigrationProgressContext {
                 control,
+                join_requests: &join_requests,
                 current,
                 total,
                 project_name: &plan.project_name,
@@ -510,6 +515,7 @@ where
                 &mut report,
                 MigrationProgressContext {
                     control,
+                    join_requests: &join_requests,
                     current: total,
                     total,
                     project_name: &plan.project_name,
@@ -829,6 +835,7 @@ fn notify_project_result(
 #[derive(Clone, Copy)]
 struct MigrationProgressContext<'a> {
     control: &'a (dyn ProjectMigrationControl + Send + Sync),
+    join_requests: &'a Mutex<[VecDeque<Instant>; 2]>,
     current: u32,
     total: u32,
     project_name: &'a str,
@@ -1012,11 +1019,12 @@ where
         match client.enable_link_sharing(project_id).await {
             Ok(tokens) => return Ok(tokens),
             Err(error) if is_rate_limited(&error) => {
+                let seconds = rate_limit_delay(&error, retry_index);
                 last_error = Some(project_api_error_message(error));
                 if let Ok(tokens) = client.get_project_tokens(project_id).await {
                     return Ok(tokens);
                 }
-                sleep_after_retry(progress, "启用链接共享", retry_index).await?;
+                sleep_after_retry(progress, "启用链接共享", retry_index, seconds).await?;
             }
             Err(error) => return Err(project_api_error_message(error)),
         }
@@ -1038,11 +1046,19 @@ where
     let mut last_error = None;
     for retry_index in 0..MIGRATION_MAX_RETRIES {
         ensure_step_not_cancelled(progress.control)?;
-        match client.join_project_via_token(token, is_read_only).await {
+        wait_before_project_join(progress, is_read_only).await?;
+        let result = client.join_project_via_token(token, is_read_only).await;
+        progress
+            .join_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)[usize::from(is_read_only)]
+            .push_back(Instant::now());
+        match result {
             Ok(project_id) => {
                 return Ok(project_id.or_else(|| Some(expected_project_id.to_string())))
             }
             Err(error) if is_rate_limited(&error) => {
+                let seconds = rate_limit_delay(&error, retry_index);
                 last_error = Some(project_api_error_message(error));
                 let target_projects = client.list_projects().await.unwrap_or_default();
                 match resolve_join_attempt(
@@ -1054,9 +1070,8 @@ where
                     JoinAttemptDecision::Joined => {
                         return Ok(Some(expected_project_id.to_string()));
                     }
-                    JoinAttemptDecision::RetryAfterSeconds(seconds) => {
-                        wait_after_rate_limit(progress, "加入共享项目", retry_index, seconds)
-                            .await?;
+                    JoinAttemptDecision::RetryAfterSeconds(_) => {
+                        sleep_after_retry(progress, "加入共享项目", retry_index, seconds).await?;
                     }
                     JoinAttemptDecision::Failed => {
                         return Err(last_error.unwrap_or_else(|| "join failed".to_string()));
@@ -1080,6 +1095,46 @@ where
     Err(last_error.unwrap_or_else(|| "rate limited while joining project".to_string()))
 }
 
+fn join_request_delay(requests: &mut VecDeque<Instant>, now: Instant) -> Option<Duration> {
+    while requests
+        .front()
+        .is_some_and(|sent| now.duration_since(*sent) >= JOIN_REQUEST_WINDOW)
+    {
+        requests.pop_front();
+    }
+    (requests.len() >= JOIN_REQUEST_LIMIT)
+        .then(|| JOIN_REQUEST_WINDOW.saturating_sub(now.duration_since(requests[0])))
+}
+
+async fn wait_before_project_join(
+    progress: MigrationProgressContext<'_>,
+    is_read_only: bool,
+) -> Result<(), String> {
+    // 读写与只读加入接口各限每账号 10 次/分钟，按响应完成时间计窗。
+    let delay = {
+        let mut requests = progress
+            .join_requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        join_request_delay(&mut requests[usize::from(is_read_only)], Instant::now())
+    };
+    if let Some(delay) = delay {
+        notify_migration_progress(
+            progress.control,
+            progress.current,
+            progress.total,
+            ProjectMigrationProgressLevel::Info,
+            format!(
+                "项目 {} 的共享加入请求已达速率上限，等待 {:.0} 秒后继续",
+                progress.project_name,
+                delay.as_secs_f64().ceil()
+            ),
+        );
+        wait_with_cancellation(progress.control, delay).await?;
+    }
+    Ok(())
+}
+
 async fn clone_project_with_retry<T>(
     client: &ProjectApiClient<T>,
     project_id: &str,
@@ -1096,6 +1151,7 @@ where
         match client.clone_project(project_id, Some(project_name)).await {
             Ok(cloned_id) => return Ok(cloned_id),
             Err(error) if is_rate_limited(&error) => {
+                let seconds = rate_limit_delay(&error, retry_index);
                 last_error = Some(project_api_error_message(error));
                 if let Some(existing_id) = owned_project_id_by_name(
                     &client.list_projects().await.unwrap_or_default(),
@@ -1104,7 +1160,7 @@ where
                 ) {
                     return Ok(existing_id);
                 }
-                sleep_after_retry(progress, "克隆项目", retry_index).await?;
+                sleep_after_retry(progress, "克隆项目", retry_index, seconds).await?;
             }
             Err(error) => return Err(project_api_error_message(error)),
         }
@@ -1132,8 +1188,9 @@ where
         {
             Ok(()) => return Ok(()),
             Err(error) if is_rate_limited(&error) => {
+                let seconds = rate_limit_delay(&error, retry_index);
                 last_error = Some(project_api_error_message(error));
-                sleep_after_retry(progress, "恢复项目协作者", retry_index).await?;
+                sleep_after_retry(progress, "恢复项目协作者", retry_index, seconds).await?;
             }
             Err(error) => return Err(project_api_error_message(error)),
         }
@@ -1146,9 +1203,69 @@ async fn sleep_after_retry(
     progress: MigrationProgressContext<'_>,
     operation: &str,
     retry_index: u32,
+    seconds: u64,
 ) -> Result<(), String> {
-    let seconds = overleaf_workflows::rate_limit_wait_seconds(retry_index);
+    if retry_index + 1 >= MIGRATION_MAX_RETRIES {
+        return ensure_step_not_cancelled(progress.control);
+    }
     wait_after_rate_limit(progress, operation, retry_index, seconds).await
+}
+
+fn rate_limit_delay(error: &ProjectApiError, retry_index: u32) -> u64 {
+    if let ProjectApiError::Http(error) = error {
+        if let Some(seconds) = error.retry_after_seconds {
+            return seconds.max(1);
+        }
+    }
+    overleaf_workflows::rate_limit_wait_seconds(retry_index)
+}
+
+#[cfg(test)]
+mod retry_after_tests {
+    use super::*;
+    use overleaf_api::project_api::ProjectApiHttpError;
+
+    #[test]
+    fn join_request_window_preserves_initial_burst_and_releases_expired_slots() {
+        let start = Instant::now();
+        let mut requests = VecDeque::new();
+        for index in 0..JOIN_REQUEST_LIMIT {
+            let now = start + Duration::from_secs(index as u64 * 2);
+            assert_eq!(join_request_delay(&mut requests, now), None);
+            requests.push_back(now);
+        }
+        assert_eq!(
+            join_request_delay(&mut requests, start + Duration::from_secs(30)),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            join_request_delay(&mut requests, start + JOIN_REQUEST_WINDOW),
+            None
+        );
+        requests.push_back(start + JOIN_REQUEST_WINDOW);
+        assert_eq!(
+            join_request_delay(&mut requests, start + JOIN_REQUEST_WINDOW),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            join_request_delay(&mut requests, start + Duration::from_secs(120)),
+            None
+        );
+        assert!(requests.is_empty());
+    }
+
+    #[test]
+    fn retry_after_preserves_server_delay_and_existing_fallback() {
+        for (delay, expected) in [(Some(3), 3), (Some(60), 60), (None, 30)] {
+            let error = ProjectApiError::Http(ProjectApiHttpError {
+                status: 429,
+                kind: ProjectApiStatusKind::RateLimited,
+                body_preview: None,
+                retry_after_seconds: delay,
+            });
+            assert_eq!(rate_limit_delay(&error, 1), expected);
+        }
+    }
 }
 
 async fn wait_after_rate_limit(
@@ -1214,10 +1331,9 @@ where
             Ok(()) => return Ok(()),
             Err(error) if is_not_found(&error) => return Ok(()),
             Err(error) if is_rate_limited(&error) => {
+                let seconds = rate_limit_delay(&error, retry_index);
                 last_error = Some(project_api_error_message(error));
-                if retry_index + 1 < MIGRATION_MAX_RETRIES {
-                    sleep_after_retry(progress, "离开原分享项目", retry_index).await?;
-                }
+                sleep_after_retry(progress, "离开原分享项目", retry_index, seconds).await?;
             }
             Err(error) => {
                 return Err(format!(
@@ -1282,9 +1398,9 @@ where
         match client.list_projects().await {
             Ok(projects) => return Ok(projects),
             Err(error) if is_rate_limited(&error) => {
+                let seconds = rate_limit_delay(&error, retry_index);
                 last_error = Some(project_api_error_message(error));
                 if retry_index + 1 < MIGRATION_MAX_RETRIES {
-                    let seconds = overleaf_workflows::rate_limit_wait_seconds(retry_index);
                     notify_migration_progress(
                         control,
                         current,

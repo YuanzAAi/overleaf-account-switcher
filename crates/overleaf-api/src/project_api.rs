@@ -50,6 +50,7 @@ pub struct ProjectMember {
 pub struct ProjectApiHttpResponse {
     pub status: u16,
     pub body: String,
+    pub retry_after_seconds: Option<u64>,
 }
 
 impl ProjectApiHttpResponse {
@@ -57,6 +58,7 @@ impl ProjectApiHttpResponse {
         Self {
             status,
             body: body.into(),
+            retry_after_seconds: None,
         }
     }
 }
@@ -66,6 +68,7 @@ pub struct ProjectApiHttpError {
     pub status: u16,
     pub kind: ProjectApiStatusKind,
     pub body_preview: Option<String>,
+    pub retry_after_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -336,12 +339,58 @@ impl ProjectApiTransport for ReqwestProjectApiTransport {
             .await
             .map_err(|err| ProjectApiTransportError::new(err.to_string()))?;
         let status = response.status().as_u16();
+        let retry_after_seconds = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| parse_retry_after(value, std::time::SystemTime::now()));
         let body = response
             .text()
             .await
             .map_err(|err| ProjectApiTransportError::new(err.to_string()))?;
 
-        Ok(ProjectApiHttpResponse::new(status, body))
+        Ok(ProjectApiHttpResponse {
+            status,
+            body,
+            retry_after_seconds,
+        })
+    }
+}
+
+fn parse_retry_after(value: &str, now: std::time::SystemTime) -> Option<u64> {
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(seconds.max(1));
+    }
+    let retry_at = chrono::DateTime::parse_from_rfc2822(value)
+        .ok()?
+        .timestamp();
+    let now = now.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
+    Some(retry_at.saturating_sub(now).max(1) as u64)
+}
+
+#[cfg(test)]
+mod retry_after_tests {
+    use super::parse_retry_after;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn retry_after_accepts_seconds_and_http_dates() {
+        assert_eq!(parse_retry_after(" 7 ", UNIX_EPOCH), Some(7));
+        assert_eq!(parse_retry_after("0", UNIX_EPOCH), Some(1));
+        assert_eq!(
+            parse_retry_after("Thu, 01 Jan 1970 00:00:30 GMT", UNIX_EPOCH),
+            Some(30)
+        );
+        assert_eq!(
+            parse_retry_after(
+                "Thu, 01 Jan 1970 00:00:30 GMT",
+                UNIX_EPOCH + Duration::from_secs(40)
+            ),
+            Some(1)
+        );
+        assert_eq!(parse_retry_after("-2", UNIX_EPOCH), None);
+        assert_eq!(parse_retry_after("invalid", UNIX_EPOCH), None);
     }
 }
 
@@ -489,7 +538,17 @@ impl<T: ProjectApiTransport> ProjectApiClient<T> {
     }
 
     async fn send(&self, request: ProjectApiRequest) -> ProjectApiResult<ProjectApiHttpResponse> {
-        Ok(self.transport.send(&request).await?)
+        let response = self.transport.send(&request).await?;
+        if response.status == 429 {
+            return Err(ProjectApiHttpError {
+                status: response.status,
+                kind: ProjectApiStatusKind::RateLimited,
+                body_preview: body_preview(&response.body),
+                retry_after_seconds: response.retry_after_seconds,
+            }
+            .into());
+        }
+        Ok(response)
     }
 }
 
@@ -640,6 +699,7 @@ pub fn ensure_project_api_success(status: u16, body: &str) -> Result<(), Project
             status,
             kind,
             body_preview: body_preview(body),
+            retry_after_seconds: None,
         })
     }
 }
