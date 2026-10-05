@@ -163,9 +163,13 @@
               <input id="account-toolbar-migrate" type="checkbox">
               换号时迁移项目
             </label>
-            <label class="check-row migration-toggle">
-              <input id="account-toolbar-sync-skills" type="checkbox">
-              同步 skills 账号
+            <label class="check-row account-switch-scope">
+              <input id="account-toolbar-sync-skills" type="checkbox" aria-label="换号范围包含 skills 账号">
+              <span class="account-switch-scope-copy" aria-hidden="true">
+                <span class="account-switch-scope-title">换号范围</span>
+                <span class="account-switch-scope-browser">仅浏览器</span>
+                <span class="account-switch-scope-skills">浏览器 + skills</span>
+              </span>
             </label>
             <details class="account-status-menu">
               <summary class="ui-btn account-toolbar-button" aria-label="状态操作" title="状态操作">

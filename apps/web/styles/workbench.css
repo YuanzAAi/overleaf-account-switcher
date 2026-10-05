@@ -21,6 +21,41 @@
 .account-bulk-row-primary {
   gap: 12px;
 }
+.account-switch-scope {
+  padding: 5px 9px;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+}
+.account-switch-scope:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.account-switch-scope:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.account-switch-scope input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+.account-switch-scope-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.account-switch-scope-title {
+  color: var(--muted);
+  font-size: 10px;
+}
+.account-switch-scope-skills,
+.account-switch-scope input:checked + .account-switch-scope-copy .account-switch-scope-browser {
+  display: none;
+}
+.account-switch-scope input:checked + .account-switch-scope-copy .account-switch-scope-skills {
+  display: inline;
+}
 .account-bulk-row-actions {
   gap: 5px;
 }
