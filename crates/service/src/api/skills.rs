@@ -177,17 +177,30 @@ fn run_installer(
         let runtime = build_api_runtime().map_err(|_| "无法启动下载".to_string())?;
         let data = runtime.block_on(async {
             let client = reqwest::Client::builder()
+                .user_agent(concat!(
+                    "overleaf-account-switcher/",
+                    env!("CARGO_PKG_VERSION")
+                ))
+                .connect_timeout(Duration::from_secs(15))
                 .timeout(Duration::from_secs(60))
                 .build()
-                .map_err(|error| error.to_string())?;
-            let mut response = client
-                .get(INSTALLER_URL)
-                .send()
-                .await
-                .and_then(reqwest::Response::error_for_status)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| download_error("下载客户端初始化失败", &error))?;
+            let response = client.get(INSTALLER_URL).send().await.map_err(|error| {
+                download_error("连接安装程序地址失败，请检查网络、代理或证书", &error)
+            })?;
+            let status = response.status();
+            let mut response = response.error_for_status().map_err(|error| {
+                download_error(
+                    &format!("下载安装程序失败（HTTP {}）", status.as_u16()),
+                    &error,
+                )
+            })?;
             let mut data = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(|error| download_error("读取安装程序响应失败", &error))?
+            {
                 if data.len() + chunk.len() > 1024 * 1024 {
                     return Err("安装程序超过大小限制".to_string());
                 }
@@ -253,6 +266,44 @@ fn run_installer(
         SkillAction::Uninstall => "skills 已卸载，账号状态和缓存已保留",
     }
     .to_string())
+}
+
+fn download_error(stage: &str, error: &dyn std::error::Error) -> String {
+    let mut message = format!("{stage}：{error}");
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str("；原因：");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    redact_url_credentials(&message)
+}
+
+fn redact_url_credentials(message: &str) -> String {
+    let mut result = String::with_capacity(message.len());
+    let mut remaining = message;
+    while let Some(scheme_end) = remaining.find("://") {
+        let (prefix, after_scheme) = remaining.split_at(scheme_end + 3);
+        result.push_str(prefix);
+        let authority_end = after_scheme
+            .find(|character: char| {
+                matches!(
+                    character,
+                    '/' | '?' | '#' | ' ' | '\n' | '\r' | ')' | ']' | ','
+                )
+            })
+            .unwrap_or(after_scheme.len());
+        let (authority, rest) = after_scheme.split_at(authority_end);
+        if let Some(at) = authority.rfind('@') {
+            result.push_str("[凭据已隐藏]@");
+            result.push_str(&authority[at + 1..]);
+        } else {
+            result.push_str(authority);
+        }
+        remaining = rest;
+    }
+    result.push_str(remaining);
+    result
 }
 
 fn write_state(path: &Path, session: &str, token: &str) -> io::Result<()> {

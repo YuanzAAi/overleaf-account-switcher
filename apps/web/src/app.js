@@ -1,4 +1,4 @@
-import { manageSkill } from "./skills.js";
+import { manageSkill, setupSyncSkillsPreference } from "./skills.js";
 import { checkForUpdates, copyDockerUpdateCommand, installUpdate } from "./updates.js";
 import { showRuntimeDiagnostics } from "./settings.js";
 import {
@@ -98,6 +98,7 @@ import {
 } from "./accounts/list.js";
 
 export function setupControls() {
+  setupSyncSkillsPreference();
   document.getElementById("check-updates").addEventListener("click", checkForUpdates);
   document.getElementById("install-update").addEventListener("click", installUpdate);
   document.getElementById("copy-update-command").addEventListener("click", copyDockerUpdateCommand);

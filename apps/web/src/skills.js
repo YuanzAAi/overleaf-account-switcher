@@ -9,6 +9,7 @@ import { renderConfig, renderOnboarding } from "./settings.js";
 
 const pending = new Set();
 const agentNames = { codex: "Codex", claude: "Claude Code" };
+const SYNC_SKILLS_STORAGE_KEY = "overleaf-switcher.sync-skills-on-switch";
 
 export function renderSkills(config = state.config) {
   const container = document.getElementById("skills-list");
@@ -29,6 +30,23 @@ export function renderSkills(config = state.config) {
 
 export function syncSkillsOnSwitch() {
   return Boolean(document.getElementById("account-toolbar-sync-skills")?.checked);
+}
+
+export function setupSyncSkillsPreference() {
+  const checkbox = document.getElementById("account-toolbar-sync-skills");
+  if (!checkbox) return;
+  try {
+    checkbox.checked = window.localStorage.getItem(SYNC_SKILLS_STORAGE_KEY) === "true";
+  } catch (_) {
+    // 受限 WebView 可能禁用本地存储。
+  }
+  checkbox.addEventListener("change", () => {
+    try {
+      window.localStorage.setItem(SYNC_SKILLS_STORAGE_KEY, String(checkbox.checked));
+    } catch (_) {
+      // 受限 WebView 可能禁用本地存储。
+    }
+  });
 }
 
 export async function manageSkill(button) {
