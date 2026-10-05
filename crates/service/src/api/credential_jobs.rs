@@ -333,24 +333,14 @@ impl CredentialBrowserOperation {
         }
     }
 
-    fn queue_message(self, max_concurrency: usize) -> String {
+    fn queue_message(self) -> &'static str {
         match self {
-            Self::Add => format!("账号添加批次已进入独立后台队列，并发上限 {max_concurrency}"),
-            Self::Refresh => {
-                format!("Cookie 刷新批次已进入独立后台队列，并发上限 {max_concurrency}")
-            }
-            Self::PasswordChange => {
-                format!("远端改密批次已进入独立后台队列，并发上限 {max_concurrency}")
-            }
-            Self::GitTokenRefresh => {
-                format!("Git token 状态刷新批次已进入独立后台队列，并发上限 {max_concurrency}")
-            }
-            Self::GitToken => {
-                format!("Git token 批次已进入独立后台队列，并发上限 {max_concurrency}")
-            }
-            Self::BrowserLogin => {
-                format!("浏览器登录批次已进入独立后台队列，并发上限 {max_concurrency}")
-            }
+            Self::Add => "账号添加批次已进入独立后台队列",
+            Self::Refresh => "Cookie 刷新批次已进入独立后台队列",
+            Self::PasswordChange => "远端改密批次已进入独立后台队列",
+            Self::GitTokenRefresh => "Git token 状态刷新批次已进入独立后台队列",
+            Self::GitToken => "Git token 批次已进入独立后台队列",
+            Self::BrowserLogin => "浏览器登录批次已进入独立后台队列",
         }
     }
 
@@ -719,11 +709,9 @@ pub(super) fn queue_credential_browser_batch_response(
         fail_tracked_task(state, Some(task_id), response.body.clone());
         return response;
     }
-    let _ = state.tasks.append_log(
-        task_id,
-        TaskLogLevel::Info,
-        operation.queue_message(registered.max_concurrency),
-    );
+    let _ = state
+        .tasks
+        .append_log(task_id, TaskLogLevel::Info, operation.queue_message());
     registration_waiting_response(state, task_id)
 }
 

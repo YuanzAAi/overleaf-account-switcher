@@ -1771,10 +1771,7 @@ fn queue_browser_window_batch_response(
     let _ = state.tasks.append_log(
         task_id,
         TaskLogLevel::Info,
-        format!(
-            "浏览器窗口批次已进入有界调度，最多同时启动 {} 个窗口",
-            registered.max_concurrency
-        ),
+        "浏览器窗口批次已进入账号独立调度",
     );
     registration_waiting_response(state, task_id)
 }

@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::TaskUserInputKind;
 
-pub const DEFAULT_BROWSER_BATCH_CONCURRENCY: usize = 3;
+pub const DEFAULT_BROWSER_BATCH_CONCURRENCY: usize = usize::MAX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -478,7 +478,11 @@ fn snapshot_locked(
         })?;
     Ok(BrowserBatchSnapshot {
         task_id: task_id.to_string(),
-        max_concurrency,
+        max_concurrency: if max_concurrency == DEFAULT_BROWSER_BATCH_CONCURRENCY {
+            batch.items.len()
+        } else {
+            max_concurrency
+        },
         items: batch.items.values().cloned().collect(),
     })
 }
