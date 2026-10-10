@@ -2,7 +2,10 @@
 
 use std::{
     env,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::Duration,
 };
@@ -70,29 +73,52 @@ fn main() {
         }
         return;
     }
+    let override_url = desktop_url_override();
+    let managed_service = ManagedService::default();
+    let service_startup = override_url.is_none().then(|| {
+        let service = managed_service.clone();
+        let (sender, receiver) = mpsc::channel::<AppHandle>();
+        thread::spawn(move || {
+            ensure_local_service(&service);
+            let Ok(app_handle) = receiver.recv() else {
+                service.stop();
+                return;
+            };
+            let dispatcher = app_handle.clone();
+            let _ = dispatcher.run_on_main_thread(move || {
+                if app_handle
+                    .state::<DesktopLifecycle>()
+                    .explicit_exit
+                    .load(Ordering::SeqCst)
+                {
+                    return;
+                }
+                if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) {
+                    if let Err(error) = window.navigate(default_desktop_ui_url()) {
+                        eprintln!("failed to navigate to local service: {error}");
+                    }
+                }
+            });
+        });
+        sender
+    });
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(ManagedService::default())
+        .manage(managed_service)
         .manage(DesktopLifecycle::default())
-        .setup(|app| {
+        .setup(move |app| {
             setup_tray(app)?;
-            let override_url = desktop_url_override();
-            let target_url = if let Some(url) = override_url.clone() {
-                url
-            } else {
-                if let Some(process) = ensure_local_service() {
-                    app.state::<ManagedService>().set(process);
-                }
-                default_desktop_ui_url()
-            };
             if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-                window.navigate(target_url.clone())?;
                 show_main_window(app.handle());
-                if override_url.is_some() {
-                    schedule_desktop_url_override(app.handle().clone(), target_url);
+                if let Some(url) = override_url {
+                    window.navigate(url.clone())?;
+                    schedule_desktop_url_override(app.handle().clone(), url);
                 }
             } else {
                 eprintln!("main desktop window was not found for UI navigation");
+            }
+            if let Some(sender) = service_startup {
+                let _ = sender.send(app.handle().clone());
             }
             Ok(())
         })

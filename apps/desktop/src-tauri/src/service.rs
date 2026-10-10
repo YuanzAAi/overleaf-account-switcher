@@ -3,10 +3,10 @@ use overleaf_storage::{default_storage_root, DATA_DIR_ENV, TMP_DIR_ENV};
 use std::{
     env, fs,
     io::{self, Read, Write},
-    net::TcpStream,
+    net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -23,50 +23,67 @@ pub(super) struct OwnedServiceProcess {
     tmp_dir: PathBuf,
 }
 
-#[derive(Default)]
+impl Drop for OwnedServiceProcess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        match cleanup_owned_service_profiles(&self.tmp_dir) {
+            Ok(report) if report.failed_count > 0 => eprintln!(
+                "owned Chrome cleanup completed with {} failure(s)",
+                report.failed_count
+            ),
+            Ok(_) => {}
+            Err(error) => eprintln!(
+                "failed to inspect owned Chrome profiles under {}: {error}",
+                self.tmp_dir.display()
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
 pub(super) struct ManagedService {
-    process: Mutex<Option<OwnedServiceProcess>>,
+    state: Arc<Mutex<ManagedServiceState>>,
+}
+
+#[derive(Default)]
+struct ManagedServiceState {
+    process: Option<OwnedServiceProcess>,
+    stopped: bool,
 }
 
 impl ManagedService {
-    pub(super) fn is_owned(&self) -> bool {
-        self.process.lock().is_ok_and(|process| process.is_some())
+    fn is_stopped(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .stopped
     }
 
-    pub(super) fn set(&self, process: OwnedServiceProcess) {
-        if let Ok(mut owned) = self.process.lock() {
-            *owned = Some(process);
+    pub(super) fn is_owned(&self) -> bool {
+        self.state.lock().is_ok_and(|state| state.process.is_some())
+    }
+
+    fn start(&self, command: &mut Command, tmp_dir: PathBuf) -> io::Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.stopped {
+            return Ok(());
         }
+        let previous = state.process.replace(OwnedServiceProcess {
+            child: command.spawn()?,
+            tmp_dir,
+        });
+        drop(state);
+        drop(previous);
+        Ok(())
     }
 
     pub(super) fn stop(&self) {
-        let Ok(mut owned) = self.process.lock() else {
-            return;
-        };
-        let process = owned.take();
-        drop(owned);
-
-        if let Some(mut process) = process {
-            let _ = process.child.kill();
-            let _ = process.child.wait();
-            match cleanup_owned_service_profiles(&process.tmp_dir) {
-                Ok(report) if report.failed_count > 0 => eprintln!(
-                    "owned Chrome cleanup completed with {} failure(s)",
-                    report.failed_count
-                ),
-                Ok(_) => {}
-                Err(error) => eprintln!(
-                    "failed to inspect owned Chrome profiles under {}: {error}",
-                    process.tmp_dir.display()
-                ),
-            }
-        }
-    }
-}
-
-impl Drop for ManagedService {
-    fn drop(&mut self) {
-        self.stop();
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.stopped = true;
+        let process = state.process.take();
+        drop(state);
+        drop(process);
     }
 }
 
@@ -106,16 +123,19 @@ fn cleanup_owned_service_profiles(tmp_dir: &Path) -> io::Result<OwnedProfileClea
     Ok(summary)
 }
 
-pub(super) fn ensure_local_service() -> Option<OwnedServiceProcess> {
-    if service_ready(Duration::from_millis(400)) {
-        return None;
+pub(super) fn ensure_local_service(managed: &ManagedService) {
+    if managed.is_stopped() {
+        return;
+    }
+    if health_request_ok_before(Instant::now() + Duration::from_millis(150)) {
+        return;
     }
 
     let mut command = match service_command() {
         Ok(command) => command,
         Err(error) => {
             eprintln!("failed to locate service executable: {error}");
-            return None;
+            return;
         }
     };
 
@@ -123,7 +143,7 @@ pub(super) fn ensure_local_service() -> Option<OwnedServiceProcess> {
         Ok(path) => path,
         Err(error) => {
             eprintln!("failed to prepare extension assets: {error}");
-            return None;
+            return;
         }
     };
     command
@@ -136,50 +156,74 @@ pub(super) fn ensure_local_service() -> Option<OwnedServiceProcess> {
     let tmp_dir = configure_desktop_storage_env(&mut command);
     configure_hidden_service_process(&mut command);
 
-    let child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            eprintln!("failed to start service: {error}");
-            return None;
-        }
-    };
+    if let Err(error) = managed.start(&mut command, tmp_dir) {
+        eprintln!("failed to start service: {error}");
+        return;
+    }
 
     if !service_ready(Duration::from_secs(12)) {
         eprintln!("overleaf-service-api was started but did not become healthy within 12s");
     }
-
-    Some(OwnedServiceProcess { child, tmp_dir })
 }
 
 fn service_ready(timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
-        if health_request_ok() {
+        let probe_deadline = deadline.min(Instant::now() + Duration::from_millis(250));
+        if health_request_ok_before(probe_deadline) {
             return true;
         }
-        if Instant::now() >= deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             return false;
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(remaining.min(Duration::from_millis(45)));
     }
 }
 
-pub(super) fn health_request_ok() -> bool {
-    let Ok(mut stream) = TcpStream::connect((SERVICE_HOST, SERVICE_PORT)) else {
+fn health_request_ok_before(deadline: Instant) -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], SERVICE_PORT));
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return false;
+    }
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, remaining) else {
         return false;
     };
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
     let request = format!(
         "GET {SERVICE_HEALTH_PATH} HTTP/1.1\r\nHost: {SERVICE_HOST}:{SERVICE_PORT}\r\nConnection: close\r\n\r\n"
     );
-    if stream.write_all(request.as_bytes()).is_err() {
-        return false;
+    let mut request_bytes = request.as_bytes();
+    while !request_bytes.is_empty() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() || stream.set_write_timeout(Some(remaining)).is_err() {
+            return false;
+        }
+        match stream.write(request_bytes) {
+            Ok(0) | Err(_) => return false,
+            Ok(written) => request_bytes = &request_bytes[written..],
+        }
     }
 
-    let mut response = String::new();
-    if stream.read_to_string(&mut response).is_err() {
+    let mut response = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() || stream.set_read_timeout(Some(remaining)).is_err() {
+            return false;
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => response.extend_from_slice(&chunk[..read]),
+            Err(_) => return false,
+        }
+    }
+    if Instant::now() >= deadline {
         return false;
     }
+    let Ok(response) = String::from_utf8(response) else {
+        return false;
+    };
     response.starts_with("HTTP/1.1 200") && response.contains("\"status\":\"ok\"")
 }
 

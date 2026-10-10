@@ -566,6 +566,10 @@ impl<T: SessionTransport> OverleafSessionClient<T> {
         let without_plan =
             classify_trial_eligibility(&trial, TrialPlanAvailability::Unknown, now_unix);
         if without_plan != TrialEligibility::Unknown {
+            let mut subscription = subscription;
+            if without_plan == TrialEligibility::ActiveTrial {
+                subscription.trial_expiry = trial.trial_expiry;
+            }
             return Ok(TrialEligibilityStatus {
                 eligibility: without_plan,
                 subscription,

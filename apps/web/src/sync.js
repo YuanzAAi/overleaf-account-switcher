@@ -81,7 +81,6 @@ export async function refresh({ detectBrowser = true, refreshSubscriptions = fal
     ensureTaskEventConnection(config && config.api_capabilities);
     renderExtensionStatus(config);
     renderOnboarding(config);
-    if (detectBrowser) await detectCurrentBrowserAccount({ silent: true });
     const [
       dashboard,
       accounts,
@@ -129,6 +128,11 @@ export async function refresh({ detectBrowser = true, refreshSubscriptions = fal
     renderAddresses(addresses);
     syncCurrentAddressDisplay(currentAddress);
     document.getElementById("last-updated").textContent = new Date().toLocaleString();
+    if (detectBrowser) {
+      await detectCurrentBrowserAccount({ silent: true });
+      state.dashboard = await fetchJson(endpoints.dashboard);
+      renderDashboard(state.dashboard, state.taskSummary);
+    }
     if (refreshSubscriptions) {
       const aliases = state.accounts.filter((account) => account.cookie?.present).map((account) => account.alias).join(",");
       if (aliases) {

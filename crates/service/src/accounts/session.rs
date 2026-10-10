@@ -377,11 +377,25 @@ pub(crate) async fn inspect_saved_account_trial_eligibility_with_progress(
         }
         let result = match document.accounts.get(alias) {
             Some(record) if record.ineligible_trial_days.contains(&trial_days) => {
+                let active_trial = matches!(
+                    record.subscription_status.as_deref(),
+                    Some("trial" | "pro" | "subscription")
+                ) && record
+                    .trial_expiry
+                    .is_some_and(|expiry| expiry as i64 > now_unix);
                 Ok(AccountTrialEligibilityReport {
                     alias: alias.to_string(),
                     email: record.email.clone(),
-                    eligibility: TrialEligibility::Ineligible,
-                    plan_availability: TrialPlanAvailability::ExistingSubscription,
+                    eligibility: if active_trial {
+                        TrialEligibility::ActiveTrial
+                    } else {
+                        TrialEligibility::Ineligible
+                    },
+                    plan_availability: if active_trial {
+                        TrialPlanAvailability::Unknown
+                    } else {
+                        TrialPlanAvailability::ExistingSubscription
+                    },
                     subscription_status: record.subscription_status.clone().unwrap_or_default(),
                     subscription_label: record.subscription_label.clone(),
                     trial_expiry: record.trial_expiry.map(|expiry| expiry as i64),
@@ -402,13 +416,21 @@ pub(crate) async fn inspect_saved_account_trial_eligibility_with_progress(
             }),
         };
         if result.as_ref().is_ok_and(|report| {
-            report.eligibility == TrialEligibility::Ineligible
+            let record = &document.accounts[alias];
+            let ineligible = report.eligibility == TrialEligibility::Ineligible
                 && report.subscription_status == "free"
                 && report.plan_availability == TrialPlanAvailability::ExistingSubscription
-                && document.accounts[alias].subscription_status.as_deref() == Some("free")
-                && !document.accounts[alias]
-                    .ineligible_trial_days
-                    .contains(&trial_days)
+                && record.subscription_status.as_deref() == Some("free");
+            let active_trial = report.eligibility == TrialEligibility::ActiveTrial
+                && matches!(
+                    report.subscription_status.as_str(),
+                    "trial" | "pro" | "subscription"
+                )
+                && report.trial_expiry.is_some_and(|expiry| expiry > now_unix)
+                && record.trial_expiry.map(|expiry| expiry as i64) == report.trial_expiry
+                && record.subscription_status.as_deref()
+                    == Some(report.subscription_status.as_str());
+            (ineligible || active_trial) && !record.ineligible_trial_days.contains(&trial_days)
         }) {
             ineligible_aliases.push(alias);
         }
@@ -577,8 +599,11 @@ pub(crate) async fn refresh_saved_account_session_with_commit_lock(
     }
     if result.is_ok() {
         let updated = &snapshot.accounts[alias];
-        if record.subscription_status != updated.subscription_status
-            || record.trial_expiry != updated.trial_expiry
+        if record.email != updated.email
+            || record.user_id != updated.user_id
+            || (updated.subscription_status.as_deref() != Some("free")
+                && (record.subscription_status != updated.subscription_status
+                    || record.trial_expiry != updated.trial_expiry))
         {
             record.ineligible_trial_days.clear();
         }
@@ -659,13 +684,14 @@ pub(crate) fn apply_login_metadata(record: &mut AccountRecord, login: &LoginResu
             .user_id
             .as_ref()
             .is_some_and(|user_id| record.user_id.as_ref() != Some(user_id))
-        || login
-            .subscription_status
-            .as_ref()
-            .is_some_and(|status| record.subscription_status.as_ref() != Some(status))
-        || login
-            .trial_expiry
-            .is_some_and(|expiry| record.trial_expiry != Some(expiry as f64))
+        || (login.subscription_status.as_deref() != Some("free")
+            && (login
+                .subscription_status
+                .as_ref()
+                .is_some_and(|status| record.subscription_status.as_ref() != Some(status))
+                || login
+                    .trial_expiry
+                    .is_some_and(|expiry| record.trial_expiry != Some(expiry as f64))))
     {
         record.ineligible_trial_days.clear();
     }
@@ -699,8 +725,9 @@ fn apply_subscription_status(
     record: &mut overleaf_storage::AccountRecord,
     status: SubscriptionStatus,
 ) {
-    if record.subscription_status.as_deref() != Some(subscription_state_key(&status.state))
-        || record.trial_expiry != status.trial_expiry.map(|expiry| expiry as f64)
+    if status.state != SubscriptionState::Free
+        && (record.subscription_status.as_deref() != Some(subscription_state_key(&status.state))
+            || record.trial_expiry != status.trial_expiry.map(|expiry| expiry as f64))
     {
         record.ineligible_trial_days.clear();
     }

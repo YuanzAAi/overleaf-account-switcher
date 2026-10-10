@@ -4,8 +4,30 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Overleaf 账号控制台</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-content: center;
+        gap: 12px;
+        text-align: center;
+        font: 14px/1.5 system-ui, sans-serif;
+        color: #374151;
+        background: #f8faf9;
+      }
+      h1 { margin: 0; font-size: 18px; font-weight: 600; }
+      p { margin: 0; color: #6b7280; }
+      @media (prefers-color-scheme: dark) {
+        body { color: #e5e7eb; background: #181b1a; }
+        p { color: #9ca3af; }
+      }
+    </style>
   </head>
   <body>
+    <h1>Overleaf 账号控制台</h1>
+    <p role="status">正在启动服务...</p>
     <noscript>Overleaf 账号控制台需要启用 JavaScript。</noscript>
   </body>
 </html>
