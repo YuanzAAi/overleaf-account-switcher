@@ -56,6 +56,8 @@ pub struct AccountRecord {
     pub subscription_label: Option<String>,
     #[serde(default)]
     pub subscription_checked_at: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ineligible_trial_days: Vec<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

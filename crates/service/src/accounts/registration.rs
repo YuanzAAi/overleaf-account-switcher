@@ -322,6 +322,7 @@ pub fn save_existing_trial_result_in_store_with_backend(
     record.trial_started_at = Some(now_unix as f64);
     record.set_trial_expiry(result.trial_expiry.map(|value| value as f64));
     record.subscription_status = Some("pro".to_string());
+    record.ineligible_trial_days.clear();
     record.subscription_label = Some("Pro annual".into());
     record.subscription_checked_at = Some(now_unix as f64);
     record.password = None;
@@ -433,6 +434,7 @@ fn save_registration_result_in_store_internal(
         subscription_status: Some("pro".to_string()),
         subscription_label: Some("Pro annual".into()),
         subscription_checked_at: Some(now_unix as f64),
+        ineligible_trial_days: Vec::new(),
         git_token: None,
         git_token_expiry: git_token_expiry.map(|value| value as f64),
     };

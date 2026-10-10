@@ -9,16 +9,13 @@ use std::{
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    webview::PageLoadEvent,
     AppHandle, Manager, Url, WindowEvent,
 };
 
 mod commands;
 mod service;
 mod updates;
-use service::{
-    ensure_local_service, health_request_ok, ManagedService, SERVICE_HOST, SERVICE_PORT,
-};
+use service::{ensure_local_service, ManagedService, SERVICE_HOST, SERVICE_PORT};
 
 const DEFAULT_DESKTOP_UI_URL: &str = "http://127.0.0.1:8765/?v=20260821-runtime158";
 const DESKTOP_URL_OVERRIDE_ENV: &str = "OVERLEAF_SWITCHER_DESKTOP_URL";
@@ -81,27 +78,21 @@ fn main() {
             setup_tray(app)?;
             let override_url = desktop_url_override();
             let target_url = if let Some(url) = override_url.clone() {
-                Some(url)
+                url
             } else {
                 if let Some(process) = ensure_local_service() {
                     app.state::<ManagedService>().set(process);
                 }
-                if health_request_ok() {
-                    Some(default_desktop_ui_url())
-                } else {
-                    eprintln!("desktop UI remains hidden because the local service is not healthy");
-                    None
-                }
+                default_desktop_ui_url()
             };
-            if let Some(url) = target_url {
-                if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-                    window.navigate(url.clone())?;
-                    if override_url.is_some() {
-                        schedule_desktop_url_override(app.handle().clone(), url);
-                    }
-                } else {
-                    eprintln!("main desktop window was not found for UI navigation");
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                window.navigate(target_url.clone())?;
+                show_main_window(app.handle());
+                if override_url.is_some() {
+                    schedule_desktop_url_override(app.handle().clone(), target_url);
                 }
+            } else {
+                eprintln!("main desktop window was not found for UI navigation");
             }
             Ok(())
         })
@@ -131,26 +122,18 @@ fn main() {
             commands::desktop_open_chrome_extensions,
             updates::desktop_install_update
         ])
-        .on_page_load(|webview, payload| {
+        .on_page_load(|webview, _| {
             if let Err(error) = webview.eval(DESKTOP_BRIDGE_SCRIPT) {
                 eprintln!("failed to inject desktop bridge: {error}");
-            }
-            let local_service_ready = !is_local_service_url(payload.url()) || health_request_ok();
-            if should_show_loaded_page(payload.url(), payload.event(), local_service_ready) {
-                let window = webview.window();
-                if let Err(error) = window.show() {
-                    eprintln!("failed to show loaded desktop window: {error}");
-                    return;
-                }
-                let _ = window.set_focus();
             }
         })
         .build(tauri::generate_context!())
         .expect("failed to build Overleaf Account Switcher desktop shell")
-        .run(|app, event| {
-            if matches!(event, tauri::RunEvent::Exit) {
-                app.state::<ManagedService>().stop();
-            }
+        .run(|app, event| match event {
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => show_main_window(app),
+            tauri::RunEvent::Exit => app.state::<ManagedService>().stop(),
+            _ => {}
         });
 }
 
@@ -206,20 +189,6 @@ fn default_desktop_ui_url() -> Url {
 
 fn is_local_service_url(url: &Url) -> bool {
     url.host_str() == Some(SERVICE_HOST) && url.port_or_known_default() == Some(SERVICE_PORT)
-}
-
-fn is_local_placeholder_url(url: &Url) -> bool {
-    url.scheme() == "tauri" || url.host_str() == Some("tauri.localhost")
-}
-
-fn should_show_loaded_page(url: &Url, event: PageLoadEvent, local_service_ready: bool) -> bool {
-    if is_local_placeholder_url(url)
-        || !matches!(event, PageLoadEvent::Finished)
-        || !matches!(url.scheme(), "http" | "https")
-    {
-        return false;
-    }
-    !is_local_service_url(url) || local_service_ready
 }
 
 fn desktop_url_override() -> Option<Url> {

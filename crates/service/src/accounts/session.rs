@@ -352,6 +352,7 @@ pub async fn inspect_saved_account_trial_eligibility_with_backend(
         trial_days,
         now_unix,
         backend,
+        None,
         |_, _| true,
     )
     .await
@@ -363,16 +364,29 @@ pub(crate) async fn inspect_saved_account_trial_eligibility_with_progress(
     trial_days: u32,
     now_unix: i64,
     backend: &dyn SecretBackend,
+    commit_lock: Option<&Mutex<()>>,
     mut on_progress: impl FnMut(usize, usize) -> bool,
 ) -> Result<AccountTrialEligibilityBatchReport, AccountSessionError> {
     let document = store.load().map_err(AccountSessionError::from_io)?;
     let mut items = Vec::with_capacity(aliases.len());
+    let mut ineligible_aliases = Vec::new();
 
     for alias in aliases {
         if !on_progress(items.len(), aliases.len()) {
             break;
         }
         let result = match document.accounts.get(alias) {
+            Some(record) if record.ineligible_trial_days.contains(&trial_days) => {
+                Ok(AccountTrialEligibilityReport {
+                    alias: alias.to_string(),
+                    email: record.email.clone(),
+                    eligibility: TrialEligibility::Ineligible,
+                    plan_availability: TrialPlanAvailability::ExistingSubscription,
+                    subscription_status: record.subscription_status.clone().unwrap_or_default(),
+                    subscription_label: record.subscription_label.clone(),
+                    trial_expiry: record.trial_expiry.map(|expiry| expiry as i64),
+                })
+            }
             Some(record) => match cookies_for_saved_session(record, alias, backend) {
                 Ok(cookies) => {
                     let client = OverleafSessionClient::new(ReqwestSessionTransport::new(cookies));
@@ -387,6 +401,17 @@ pub(crate) async fn inspect_saved_account_trial_eligibility_with_progress(
                 alias: alias.to_string(),
             }),
         };
+        if result.as_ref().is_ok_and(|report| {
+            report.eligibility == TrialEligibility::Ineligible
+                && report.subscription_status == "free"
+                && report.plan_availability == TrialPlanAvailability::ExistingSubscription
+                && document.accounts[alias].subscription_status.as_deref() == Some("free")
+                && !document.accounts[alias]
+                    .ineligible_trial_days
+                    .contains(&trial_days)
+        }) {
+            ineligible_aliases.push(alias);
+        }
         items.push(match result {
             Ok(report) => AccountTrialEligibilityBatchItem {
                 alias: alias.to_string(),
@@ -399,6 +424,39 @@ pub(crate) async fn inspect_saved_account_trial_eligibility_with_progress(
                 error: Some(error),
             },
         });
+    }
+
+    if !ineligible_aliases.is_empty() {
+        let _guard =
+            commit_lock
+                .map(Mutex::lock)
+                .transpose()
+                .map_err(|_| AccountSessionError::Io {
+                    message: "account commit lock poisoned".into(),
+                })?;
+        let mut current = store.load().map_err(AccountSessionError::from_io)?;
+        let mut changed = false;
+        for alias in ineligible_aliases {
+            let original = &document.accounts[alias];
+            let Some(record) = current.accounts.get_mut(alias) else {
+                continue;
+            };
+            // Only merge into the same account snapshot; never restore a deleted account.
+            if record.email == original.email
+                && record.user_id == original.user_id
+                && record.created_at == original.created_at
+                && record.cookie_refs == original.cookie_refs
+                && record.subscription_status == original.subscription_status
+                && record.trial_expiry == original.trial_expiry
+                && !record.ineligible_trial_days.contains(&trial_days)
+            {
+                record.ineligible_trial_days.push(trial_days);
+                changed = true;
+            }
+        }
+        if changed {
+            store.save(&current).map_err(AccountSessionError::from_io)?;
+        }
     }
 
     on_progress(items.len(), aliases.len());
@@ -519,6 +577,11 @@ pub(crate) async fn refresh_saved_account_session_with_commit_lock(
     }
     if result.is_ok() {
         let updated = &snapshot.accounts[alias];
+        if record.subscription_status != updated.subscription_status
+            || record.trial_expiry != updated.trial_expiry
+        {
+            record.ineligible_trial_days.clear();
+        }
         if updated.subscription_status.as_deref() == Some("free") {
             record.trial_started_at = None;
         }
@@ -588,6 +651,24 @@ pub(crate) fn overleaf_session_expiry(cookies: &[CookieCapture]) -> Option<i64> 
 }
 
 pub(crate) fn apply_login_metadata(record: &mut AccountRecord, login: &LoginResult, now_unix: i64) {
+    if login
+        .email
+        .as_ref()
+        .is_some_and(|email| record.email.as_ref() != Some(email))
+        || login
+            .user_id
+            .as_ref()
+            .is_some_and(|user_id| record.user_id.as_ref() != Some(user_id))
+        || login
+            .subscription_status
+            .as_ref()
+            .is_some_and(|status| record.subscription_status.as_ref() != Some(status))
+        || login
+            .trial_expiry
+            .is_some_and(|expiry| record.trial_expiry != Some(expiry as f64))
+    {
+        record.ineligible_trial_days.clear();
+    }
     record.cookie_expiry = overleaf_session_expiry(&login.cookies).map(|value| value as f64);
     record.cookie_updated_at = Some(now_unix as f64);
     record.last_login_at = Some(now_unix as f64);
@@ -618,6 +699,11 @@ fn apply_subscription_status(
     record: &mut overleaf_storage::AccountRecord,
     status: SubscriptionStatus,
 ) {
+    if record.subscription_status.as_deref() != Some(subscription_state_key(&status.state))
+        || record.trial_expiry != status.trial_expiry.map(|expiry| expiry as f64)
+    {
+        record.ineligible_trial_days.clear();
+    }
     if status.state == SubscriptionState::Free {
         record.trial_days = None;
         record.trial_started_at = None;

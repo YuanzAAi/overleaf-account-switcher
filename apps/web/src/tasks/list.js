@@ -169,8 +169,13 @@ export function renderTasks(tasks) {
   }
 
   const blocks = [];
+  const runningProgressTasks = [];
   let clientLogIndex = 0;
   for (const task of orderedTaskItems) {
+    if (task.progress && String(task.phase || "").toLowerCase() === "running") {
+      runningProgressTasks.push(task);
+      continue;
+    }
     const start = clientLogIndex;
     const timestamp = runtimeTaskTimestamp(task);
     while (clientLogIndex < clientLogs.length && clientLogs[clientLogIndex].createdAt <= timestamp) {
@@ -180,6 +185,7 @@ export function renderTasks(tasks) {
     blocks.push(runtimeTaskLogBlock(task, activeRegistrationBatches));
   }
   if (clientLogIndex < clientLogs.length) blocks.push(runtimeClientLogBlock(clientLogs.slice(clientLogIndex)));
+  for (const task of runningProgressTasks) blocks.push(runtimeTaskLogBlock(task, activeRegistrationBatches));
   list.innerHTML = blocks.join("");
   list.querySelectorAll("[data-task-input-form]").forEach((form) => {
     const key = `${form.dataset.taskInputForm}:${form.dataset.taskInputKind}`;

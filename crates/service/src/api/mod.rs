@@ -1467,6 +1467,7 @@ fn inspect_account_trial_eligibility_response(
 
     let store = AccountStore::new(state.config.accounts_path());
     let backend = state.secret_backend.clone();
+    let commit_lock = state.account_commit_lock();
     if let Some(task_id) = request.task_id {
         let owned_task_id = task_id.clone();
         let job = ApiBackgroundJob::new("trial-eligibility", move |shared_state| {
@@ -1477,6 +1478,7 @@ fn inspect_account_trial_eligibility_response(
                     request.trial_days,
                     now_unix,
                     backend.as_ref(),
+                    Some(&commit_lock),
                     |current, total| {
                         let Ok(mut state) = shared_state.lock() else {
                             return false;
@@ -1519,12 +1521,14 @@ fn inspect_account_trial_eligibility_response(
     }
 
     let result = block_on_api(
-        crate::account_session::inspect_saved_account_trial_eligibility_with_backend(
+        crate::account_session::inspect_saved_account_trial_eligibility_with_progress(
             &store,
             &request.aliases,
             request.trial_days,
             now_unix,
             backend.as_ref(),
+            Some(&commit_lock),
+            |_, _| true,
         ),
     )
     .and_then(|result| result.map_err(account_session_error_response));
