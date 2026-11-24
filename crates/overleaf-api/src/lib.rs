@@ -3,6 +3,7 @@ use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod project_api;
@@ -126,8 +127,13 @@ pub(crate) fn body_preview(body: &str) -> Option<String> {
 pub fn extract_git_auth_token(page_html: &str) -> Option<String> {
     // 元数据里的 accessTokenPartial 只是脱敏前缀。
     let text = page_text(page_html);
-    let re = Regex::new(r"\bolp_[A-Za-z0-9_-]+\b").unwrap();
-    for matched in re.find_iter(&text) {
+    extract_git_auth_token_from_text(&text)
+}
+
+fn extract_git_auth_token_from_text(text: &str) -> Option<String> {
+    static TOKEN_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\bolp_[A-Za-z0-9_-]+\b").unwrap());
+    for matched in TOKEN_RE.find_iter(text) {
         if text[matched.end()..].starts_with('*') {
             continue;
         }
@@ -137,14 +143,14 @@ pub fn extract_git_auth_token(page_html: &str) -> Option<String> {
 }
 
 pub fn parse_git_token_page_state(page_html: &str, now_unix: i64) -> GitTokenPageState {
+    static MASKED_TOKEN_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"olp_[A-Za-z0-9_-]*\*+").unwrap());
     let text = page_text(page_html);
     let lower = text.to_ascii_lowercase();
-    let has_existing_masked_token = Regex::new(r"olp_[A-Za-z0-9_-]*\*+")
-        .unwrap()
-        .is_match(&text);
+    let has_existing_masked_token = MASKED_TOKEN_RE.is_match(&text);
 
     GitTokenPageState {
-        visible_token: extract_git_auth_token(page_html),
+        visible_token: extract_git_auth_token_from_text(&text),
         expiry: select_git_token_expiry(parse_git_token_expiry_candidates(&text), now_unix),
         has_existing_masked_token,
         can_generate_token: lower.contains("generate token"),
@@ -153,14 +159,15 @@ pub fn parse_git_token_page_state(page_html: &str, now_unix: i64) -> GitTokenPag
 }
 
 pub fn parse_git_token_expiry_candidates(text: &str) -> Vec<i64> {
+    static DATE_PATTERNS: LazyLock<[Regex; 2]> = LazyLock::new(|| {
+        [
+            Regex::new(r"\b\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\.?\s+\d{4}\b").unwrap(),
+            Regex::new(r"\b[A-Za-z]+\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}\b").unwrap(),
+        ]
+    });
     let mut candidates = Vec::new();
-    let date_patterns = [
-        r"\b\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\.?\s+\d{4}\b",
-        r"\b[A-Za-z]+\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}\b",
-    ];
 
-    for pattern in date_patterns {
-        let re = Regex::new(pattern).unwrap();
+    for re in DATE_PATTERNS.iter() {
         for matched in re.find_iter(text) {
             if let Some(timestamp) = parse_overleaf_datetime(matched.as_str()) {
                 candidates.push(timestamp);
@@ -242,13 +249,13 @@ pub fn meta_boolean(page_html: &str, expected_name: &str) -> Option<bool> {
 }
 
 pub fn parse_overleaf_datetime(date_str: &str) -> Option<i64> {
+    static TRAILING_UTC_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)\s+UTC\s*$").unwrap());
     if let Ok(date) = chrono::DateTime::parse_from_rfc3339(date_str.trim()) {
         return Some(date.timestamp());
     }
     let stripped = strip_ordinals(date_str);
-    let without_utc = Regex::new(r"(?i)\s+UTC\s*$")
-        .unwrap()
-        .replace(stripped.trim(), "");
+    let without_utc = TRAILING_UTC_RE.replace(stripped.trim(), "");
     let clean = without_utc.replace(',', " ");
     let parts: Vec<_> = clean.split_whitespace().collect();
     if parts.len() < 3 {
@@ -333,9 +340,10 @@ pub fn parse_subscription_status_with_now(
     }
 
     if let Some(project_html) = project_html {
+        static DAYS_RE: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?i)(\d+)\s+more\s+days?\s+on\s+your").unwrap());
         let project_text = page_text(project_html);
-        let days_re = Regex::new(r"(?i)(\d+)\s+more\s+days?\s+on\s+your").unwrap();
-        if let Some(captures) = days_re.captures(&project_text) {
+        if let Some(captures) = DAYS_RE.captures(&project_text) {
             if let Some(days_left) = captures
                 .get(1)
                 .and_then(|value| value.as_str().parse::<i64>().ok())
@@ -528,8 +536,10 @@ fn looks_like_overleaf_session_value(input: &str) -> bool {
 }
 
 fn parse_current_plan(text: &str) -> (Option<SubscriptionState>, Option<String>) {
-    let plan_re = Regex::new(r"(?i)currently\s+subscribed\s+to\s+the\s+(.+?)\s+plan\b").unwrap();
-    let Some(captures) = plan_re.captures(text) else {
+    static PLAN_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)currently\s+subscribed\s+to\s+the\s+(.+?)\s+plan\b").unwrap()
+    });
+    let Some(captures) = PLAN_RE.captures(text) else {
         return (None, None);
     };
 
@@ -553,8 +563,17 @@ fn parse_current_plan(text: &str) -> (Option<SubscriptionState>, Option<String>)
 }
 
 fn extract_termination_date(raw_html: &str, text: &str) -> Option<String> {
-    let strong_re = Regex::new(r"(?is)terminate\s+on\s*<strong>\s*([^<]+?)\s*</strong>").unwrap();
-    if let Some(date) = strong_re
+    static STRONG_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?is)terminate\s+on\s*<strong>\s*([^<]+?)\s*</strong>").unwrap()
+    });
+    static TEXT_RE: LazyLock<Regex> = LazyLock::new(|| {
+        let date_pattern = r"((?:[A-Z][A-Za-z]+\.?\s+\d{1,2}(?:st|nd|rd|th)?,\s+\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+[A-Z][A-Za-z]+\.?\s+\d{4})(?:\s+\d{1,2}:\d{2}\s+[AP]M)?(?:\s+UTC)?)";
+        Regex::new(&format!(
+            r"(?i)(?:(?:will\s+)?(?:terminate|terminates?|ends?|expires?)|lose\s+access\s+to\s+all\s+premium\s+features)\s+(?:on\s+)?{date_pattern}"
+        ))
+        .unwrap()
+    });
+    if let Some(date) = STRONG_RE
         .captures(raw_html)
         .and_then(|captures| captures.get(1))
         .map(|value| page_text(value.as_str()))
@@ -562,28 +581,25 @@ fn extract_termination_date(raw_html: &str, text: &str) -> Option<String> {
         return Some(date);
     }
 
-    let date_pattern = r"((?:[A-Z][A-Za-z]+\.?\s+\d{1,2}(?:st|nd|rd|th)?,\s+\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+[A-Z][A-Za-z]+\.?\s+\d{4})(?:\s+\d{1,2}:\d{2}\s+[AP]M)?(?:\s+UTC)?)";
-    let text_re = Regex::new(&format!(
-        r"(?i)(?:(?:will\s+)?(?:terminate|terminates?|ends?|expires?)|lose\s+access\s+to\s+all\s+premium\s+features)\s+(?:on\s+)?{date_pattern}"
-    ))
-    .unwrap();
-    text_re
+    TEXT_RE
         .captures(text)
         .and_then(|captures| captures.get(1))
         .map(|value| value.as_str().to_string())
 }
 
 fn is_pro_plan_text(lower_text: &str) -> bool {
-    let patterns = [
-        r"\b(?:pro|professional)\s+(?:annual|monthly)\b",
-        r"\b(?:annual|monthly)\s+(?:pro|professional)\b",
-        r"\bcurrent\s+plan\b.{0,120}\b(?:pro|professional)\b",
-        r"\byour\s+plan\b.{0,120}\b(?:pro|professional)\b",
-        r"\bcurrently\s+subscribed\b.{0,120}\b(?:pro|professional)\b",
-    ];
-    patterns
+    static PRO_PLAN_PATTERNS: LazyLock<[Regex; 5]> = LazyLock::new(|| {
+        [
+            Regex::new(r"\b(?:pro|professional)\s+(?:annual|monthly)\b").unwrap(),
+            Regex::new(r"\b(?:annual|monthly)\s+(?:pro|professional)\b").unwrap(),
+            Regex::new(r"\bcurrent\s+plan\b.{0,120}\b(?:pro|professional)\b").unwrap(),
+            Regex::new(r"\byour\s+plan\b.{0,120}\b(?:pro|professional)\b").unwrap(),
+            Regex::new(r"\bcurrently\s+subscribed\b.{0,120}\b(?:pro|professional)\b").unwrap(),
+        ]
+    });
+    PRO_PLAN_PATTERNS
         .iter()
-        .any(|pattern| Regex::new(pattern).unwrap().is_match(lower_text))
+        .any(|pattern| pattern.is_match(lower_text))
 }
 
 pub(crate) fn extract_meta_content(page_html: &str, expected_name: &str) -> Option<String> {
@@ -600,11 +616,23 @@ pub(crate) fn extract_meta_content(page_html: &str, expected_name: &str) -> Opti
 }
 
 fn attr_value(tag: &str, attr_name: &str) -> Option<String> {
-    let pattern = format!(
-        r#"(?is)\b{}\s*=\s*("([^"]*)"|'([^']*)')"#,
-        regex::escape(attr_name)
-    );
-    let re = Regex::new(&pattern).unwrap();
+    static NAME_ATTR_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"(?is)\bname\s*=\s*("([^"]*)"|'([^']*)')"#).unwrap());
+    static CONTENT_ATTR_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"(?is)\bcontent\s*=\s*("([^"]*)"|'([^']*)')"#).unwrap());
+    let dynamic_re;
+    let re = match attr_name {
+        "name" => &*NAME_ATTR_RE,
+        "content" => &*CONTENT_ATTR_RE,
+        other => {
+            dynamic_re = Regex::new(&format!(
+                r#"(?is)\b{}\s*=\s*("([^"]*)"|'([^']*)')"#,
+                regex::escape(other)
+            ))
+            .unwrap();
+            &dynamic_re
+        }
+    };
     let captures = re.captures(tag)?;
     captures
         .get(2)
@@ -624,10 +652,9 @@ fn unescape_html(input: &str) -> String {
 }
 
 fn strip_ordinals(input: &str) -> String {
-    Regex::new(r"(?i)(\d+)(st|nd|rd|th)\b")
-        .unwrap()
-        .replace_all(input.trim(), "$1")
-        .to_string()
+    static ORDINAL_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)(\d+)(st|nd|rd|th)\b").unwrap());
+    ORDINAL_RE.replace_all(input.trim(), "$1").to_string()
 }
 
 fn month_number(input: &str) -> Option<u32> {

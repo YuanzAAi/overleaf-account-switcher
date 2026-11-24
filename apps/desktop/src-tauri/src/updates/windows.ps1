@@ -17,6 +17,7 @@ if ([IO.Path]::GetDirectoryName($Stage) -ne $InstallDir -or
 $Items = @()
 $ParentExited = $false
 $Recovered = $true
+$Failed = $false
 try {
     $Parent = Get-Process -Id $ParentProcessId -ErrorAction SilentlyContinue
     if ($Parent -and -not $Parent.WaitForExit(90000)) { throw 'Application did not exit' }
@@ -47,6 +48,7 @@ try {
     }
     Start-Process -FilePath $Target -WorkingDirectory $InstallDir -WindowStyle Hidden
 } catch {
+    $Failed = $true
     $Reason = $_.Exception.Message
     [array]::Reverse($Items)
     foreach ($Item in $Items) {
@@ -62,9 +64,18 @@ try {
     if ($ParentExited -and $Recovered) {
         Start-Process -FilePath $Target -WorkingDirectory $InstallDir -WindowStyle Hidden
     }
-    Add-Type -AssemblyName System.Windows.Forms
     $Detail = if ($Recovered) { 'The previous version is unchanged.' } else { "Recovery files: $Stage" }
-    [System.Windows.Forms.MessageBox]::Show("Update failed: $Reason`n$Detail", 'Overleaf Account Switcher') | Out-Null
+    $Message = "Update failed: $Reason`n$Detail"
+    try {
+        [Console]::Error.WriteLine($Message)
+        [IO.File]::WriteAllText((Join-Path $InstallDir 'overleaf-update-error.log'), "$(Get-Date -Format o)`n$Message`n")
+    } catch {}
+    if ([Environment]::UserInteractive -and [string]::IsNullOrEmpty($env:CI)) {
+        try {
+            Add-Type -AssemblyName System.Windows.Forms
+            [System.Windows.Forms.MessageBox]::Show($Message, 'Overleaf Account Switcher') | Out-Null
+        } catch {}
+    }
 } finally {
     if ($Recovered) {
         $Resolved = (Resolve-Path -LiteralPath $Stage).Path
@@ -73,3 +84,4 @@ try {
         }
     }
 }
+if ($Failed) { exit 1 }

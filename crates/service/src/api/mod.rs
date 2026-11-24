@@ -110,8 +110,8 @@ use crate::{
     refresh_account_git_token_metadata_with_browser_batch_in_store_with_backend,
     refresh_account_git_token_metadata_with_browser_in_store_with_backend,
     refresh_saved_account_sessions_in_store_with_backend,
-    register_account_with_subscription_in_store_with_backend, remove_accounts_locally_in_store,
-    remove_card_in_store_with_backend, resolve_account_cookies_for_recovery,
+    register_account_with_subscription_in_store_with_backend,
+    remove_accounts_locally_in_store_with_backend, remove_card_in_store_with_backend, resolve_account_cookies_for_recovery,
     save_existing_trial_result_in_store_with_backend,
     save_registration_result_in_store_with_backend,
     save_registration_result_without_password_in_store_with_backend, select_address_by_index,
@@ -220,12 +220,14 @@ pub struct ApiState {
     pub runtime: DashboardRuntimeState,
     pub tasks: TaskStateStore,
     update_prepared: bool,
+    reconciled_by_maintenance_loop: bool,
     pub browser_automation: Option<Arc<dyn BrowserAutomation + Send + Sync>>,
     pub local_chrome_browser: Option<Arc<LocalChromeBrowserAutomation>>,
-    registration_sessions: Arc<StdMutex<BTreeMap<String, RegistrationSessionEntry>>>,
+    registration_sessions: Arc<StdMutex<BTreeMap<String, SessionSlot<RegistrationSessionEntry>>>>,
     registration_slot_owners: Arc<StdMutex<BTreeMap<String, String>>>,
     registration_card_reservations: Arc<StdMutex<BTreeMap<String, String>>>,
-    account_browser_sessions: Arc<StdMutex<BTreeMap<String, AccountBrowserSessionEntry>>>,
+    account_browser_sessions:
+        Arc<StdMutex<BTreeMap<String, SessionSlot<AccountBrowserSessionEntry>>>>,
     browser_batch_coordinator: BrowserBatchCoordinator,
     background_jobs: Arc<StdMutex<VecDeque<ApiBackgroundJob>>>,
     background_task_snapshots: Arc<StdMutex<VecDeque<TaskSnapshot>>>,
@@ -270,10 +272,25 @@ impl ApiBackgroundJob {
     }
 }
 
+struct SessionSlot<T> {
+    profile_dir: PathBuf,
+    entry: Arc<StdMutex<Option<T>>>,
+}
+
+impl<T> Clone for SessionSlot<T> {
+    fn clone(&self) -> Self {
+        Self {
+            profile_dir: self.profile_dir.clone(),
+            entry: Arc::clone(&self.entry),
+        }
+    }
+}
+
 struct RegistrationSessionEntry {
     runtime: tokio::runtime::Runtime,
     session: LocalChromeCdpSession,
     context: RegistrationSessionContext,
+    submitted_payment_card: Option<String>,
     last_activity: Instant,
 }
 
@@ -395,6 +412,7 @@ impl ApiState {
             runtime: DashboardRuntimeState::default(),
             tasks: TaskStateStore::default(),
             update_prepared: false,
+            reconciled_by_maintenance_loop: false,
             browser_automation,
             local_chrome_browser,
             registration_sessions: Arc::new(StdMutex::new(BTreeMap::new())),
@@ -513,6 +531,29 @@ impl ApiState {
         }
     }
 
+    pub fn enable_maintenance_loop(&mut self) {
+        self.reconciled_by_maintenance_loop = true;
+    }
+
+    pub(super) fn active_browser_session_profile_names(&self) -> BTreeSet<String> {
+        let mut names = BTreeSet::new();
+        if let Ok(sessions) = self.registration_sessions.lock() {
+            for slot in sessions.values() {
+                if let Some(name) = slot.profile_dir.file_name().and_then(|value| value.to_str()) {
+                    names.insert(name.to_string());
+                }
+            }
+        }
+        if let Ok(sessions) = self.account_browser_sessions.lock() {
+            for slot in sessions.values() {
+                if let Some(name) = slot.profile_dir.file_name().and_then(|value| value.to_str()) {
+                    names.insert(name.to_string());
+                }
+            }
+        }
+        names
+    }
+
     pub fn account_commit_lock(&self) -> Arc<StdMutex<()>> {
         Arc::clone(&self.account_commit_lock)
     }
@@ -576,7 +617,11 @@ impl AccountSwitchCommandExecutor for ExtensionBridgeWebSocketServer {
     }
 
     async fn extension_client_count(&self) -> Option<usize> {
-        Some(self.connected_clients().await)
+        Some(self.connected_client_count())
+    }
+
+    fn extension_client_count_sync(&self) -> Option<usize> {
+        Some(self.connected_client_count())
     }
 }
 
@@ -1131,7 +1176,11 @@ pub fn handle_api_request_with_body_mut(
         };
     }
 
-    reconcile_browser_sessions(state, now_unix);
+    if state.reconciled_by_maintenance_loop {
+        state.apply_background_task_snapshots();
+    } else {
+        reconcile_browser_sessions(state, now_unix);
+    }
 
     if method == "POST" && path == "/runtime/updates/cancel" {
         state.update_prepared = false;
@@ -1267,12 +1316,13 @@ pub fn handle_api_request_with_body_mut(
 }
 
 fn dashboard_response(state: &ApiState, now_unix: i64) -> ApiResponse {
-    match load_display_accounts(state) {
+    let runtime = runtime_state(state);
+    match load_display_accounts_with_runtime(state, &runtime) {
         Ok(document) => json_response(
             200,
             &dashboard_summary_with_backend(
                 &document,
-                runtime_state(state),
+                runtime,
                 now_unix,
                 state.secret_backend.as_ref(),
             ),
@@ -1527,7 +1577,8 @@ fn inspect_account_trial_eligibility_response(
             request.trial_days,
             now_unix,
             backend.as_ref(),
-            Some(&commit_lock),
+            // 同步路径已由 server.rs 请求级 account_commit_lock 串行化，不能在同线程重复加锁。
+            None,
             |_, _| true,
         ),
     )
@@ -2269,22 +2320,22 @@ fn cancel_task_response(state: &mut ApiState, body: &str) -> ApiResponse {
 
     match state.tasks.request_cancel(task_id) {
         Ok(snapshot) => {
-            if let Some(entry) = take_registration_session(state, task_id) {
+            if let Some(slot) = take_registration_session_slot(state, task_id) {
                 return enqueue_cancelled_browser_session_cleanup(
                     state,
                     task_id,
                     snapshot,
                     CancelledBrowserSessionKind::Registration,
-                    move || cleanup_registration_session(entry),
+                    move || cleanup_registration_session_slot(slot),
                 );
             }
-            if let Some(entry) = take_account_browser_session(state, task_id) {
+            if let Some(slot) = take_account_browser_session_slot(state, task_id) {
                 return enqueue_cancelled_browser_session_cleanup(
                     state,
                     task_id,
                     snapshot,
                     CancelledBrowserSessionKind::AccountBrowser,
-                    move || cleanup_account_browser_session(entry),
+                    move || cleanup_account_browser_session_slot(slot),
                 );
             }
             // CDP 会话归工作线程所有，清理结束前保留任务和账号锁。
@@ -2624,6 +2675,38 @@ fn task_input_response(state: &mut ApiState, body: &str, now_unix: i64) -> ApiRe
         return account_browser_session_missing_response(task_id);
     }
 
+    if kind == TaskUserInputKind::NewBrowserCredentials {
+        match serde_json::from_str::<BrowserCredentialsTaskInput>(&value) {
+            Ok(input) if !input.password.trim().is_empty() => {}
+            Ok(_) => {
+                let _ = state.tasks.append_log(
+                    task_id,
+                    TaskLogLevel::Warning,
+                    "密码不能为空，请重新输入",
+                );
+                return json_response(
+                    400,
+                    &ApiErrorBody {
+                        error: "password must not be empty".to_string(),
+                    },
+                );
+            }
+            Err(error) => {
+                let _ = state.tasks.append_log(
+                    task_id,
+                    TaskLogLevel::Warning,
+                    "重新输入格式无效，请检查邮箱和密码",
+                );
+                return json_response(
+                    400,
+                    &ApiErrorBody {
+                        error: format!("invalid browser credentials input: {error}"),
+                    },
+                );
+            }
+        }
+    }
+
     let registration_continuation = matches!(
         kind,
         TaskUserInputKind::EmailCode | TaskUserInputKind::NewRegistrationCredentials
@@ -2640,8 +2723,7 @@ fn task_input_response(state: &mut ApiState, body: &str, now_unix: i64) -> ApiRe
                 )
             }
             TaskUserInputKind::NewBrowserCredentials => {
-                continue_account_browser_with_new_credentials_response(state, task_id, &value)
-                    .unwrap_or_else(|| account_browser_session_missing_response(task_id))
+                enqueue_account_browser_task_continuation(state, task_id, kind, value, snapshot)
             }
             TaskUserInputKind::CaptchaCompleted if registration_continuation => {
                 enqueue_registration_task_continuation(
@@ -2649,8 +2731,7 @@ fn task_input_response(state: &mut ApiState, body: &str, now_unix: i64) -> ApiRe
                 )
             }
             TaskUserInputKind::CaptchaCompleted => {
-                continue_account_browser_after_captcha_response(state, task_id)
-                    .unwrap_or_else(|| registration_session_missing_response(task_id))
+                enqueue_account_browser_task_continuation(state, task_id, kind, value, snapshot)
             }
             TaskUserInputKind::EmailCode | TaskUserInputKind::NewRegistrationCredentials => {
                 registration_session_missing_response(task_id)
@@ -2658,6 +2739,46 @@ fn task_input_response(state: &mut ApiState, body: &str, now_unix: i64) -> ApiRe
         },
         Err(error) => task_state_error_response(error),
     }
+}
+
+fn enqueue_account_browser_task_continuation(
+    state: &mut ApiState,
+    task_id: &str,
+    kind: TaskUserInputKind,
+    value: String,
+    snapshot: TaskSnapshot,
+) -> ApiResponse {
+    state.tasks.discard_user_inputs(task_id, kind);
+    let owned_task_id = task_id.to_string();
+    let job = ApiBackgroundJob::new("account-browser-input", move |shared_state| {
+        let Ok(mut worker_state) = shared_state
+            .lock()
+            .map(|state| state.background_worker_clone())
+        else {
+            return;
+        };
+        match kind {
+            TaskUserInputKind::NewBrowserCredentials => {
+                let _ = continue_account_browser_with_new_credentials_response(
+                    &mut worker_state,
+                    &owned_task_id,
+                    &value,
+                );
+            }
+            TaskUserInputKind::CaptchaCompleted => {
+                let _ = continue_account_browser_after_captcha_response(
+                    &mut worker_state,
+                    &owned_task_id,
+                );
+            }
+            _ => {}
+        }
+    });
+    if let Err(response) = state.enqueue_background_job(job) {
+        fail_tracked_task(state, Some(task_id), response.body.clone());
+        return response;
+    }
+    json_response(202, &snapshot)
 }
 
 fn enqueue_registration_task_continuation(
@@ -3367,6 +3488,7 @@ fn continue_account_browser_session_from_login_result(
                 card_bin,
                 one_card_per_account: false,
             },
+            submitted_payment_card: None,
             last_activity: Instant::now(),
         },
         now_unix,
@@ -4030,7 +4152,11 @@ fn remove_accounts_response(state: &mut ApiState, body: &str) -> ApiResponse {
         return response;
     }
 
-    match remove_accounts_locally_in_store(&store, &request.aliases) {
+    match remove_accounts_locally_in_store_with_backend(
+        &store,
+        &request.aliases,
+        state.secret_backend.as_ref(),
+    ) {
         Ok(report) => {
             complete_tracked_task(state, task_id.as_deref(), "本地账号移除完成", &report);
             json_response(200, &report)
@@ -4551,10 +4677,14 @@ fn insert_registration_session(
     task_id: &str,
     entry: RegistrationSessionEntry,
 ) -> Result<(), ApiResponse> {
+    let slot = SessionSlot {
+        profile_dir: entry.session.profile_dir().to_path_buf(),
+        entry: Arc::new(StdMutex::new(Some(entry))),
+    };
     let old = match state.registration_sessions.lock() {
-        Ok(mut sessions) => sessions.insert(task_id.to_string(), entry),
+        Ok(mut sessions) => sessions.insert(task_id.to_string(), slot),
         Err(_) => {
-            cleanup_registration_session(entry);
+            cleanup_registration_session_slot(slot);
             return Err(json_response(
                 500,
                 &ApiErrorBody {
@@ -4564,7 +4694,7 @@ fn insert_registration_session(
         }
     };
     if let Some(old) = old {
-        cleanup_registration_session(old);
+        cleanup_registration_session_slot(old);
     }
     Ok(())
 }
@@ -4577,10 +4707,10 @@ fn has_registration_session(state: &ApiState, task_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn take_registration_session(
-    state: &mut ApiState,
+fn take_registration_session_slot(
+    state: &ApiState,
     task_id: &str,
-) -> Option<RegistrationSessionEntry> {
+) -> Option<SessionSlot<RegistrationSessionEntry>> {
     state
         .registration_sessions
         .lock()
@@ -4588,8 +4718,38 @@ fn take_registration_session(
         .and_then(|mut sessions| sessions.remove(task_id))
 }
 
+fn remove_registration_session_slot_if_same(
+    state: &ApiState,
+    task_id: &str,
+    expected: &SessionSlot<RegistrationSessionEntry>,
+) {
+    if let Ok(mut sessions) = state.registration_sessions.lock() {
+        if sessions
+            .get(task_id)
+            .is_some_and(|current| Arc::ptr_eq(&current.entry, &expected.entry))
+        {
+            sessions.remove(task_id);
+        }
+    }
+}
+
+fn take_registration_session(
+    state: &mut ApiState,
+    task_id: &str,
+) -> Option<RegistrationSessionEntry> {
+    let slot = take_registration_session_slot(state, task_id)?;
+    slot.entry.lock().ok().and_then(|mut guard| guard.take())
+}
+
 fn cleanup_registration_session(entry: RegistrationSessionEntry) {
     let _ = entry.runtime.block_on(entry.session.cleanup());
+}
+
+fn cleanup_registration_session_slot(slot: SessionSlot<RegistrationSessionEntry>) {
+    let entry = slot.entry.lock().ok().and_then(|mut guard| guard.take());
+    if let Some(entry) = entry {
+        cleanup_registration_session(entry);
+    }
 }
 
 fn insert_account_browser_session(
@@ -4597,10 +4757,14 @@ fn insert_account_browser_session(
     task_id: &str,
     entry: AccountBrowserSessionEntry,
 ) -> Result<(), ApiResponse> {
+    let slot = SessionSlot {
+        profile_dir: entry.session.profile_dir().to_path_buf(),
+        entry: Arc::new(StdMutex::new(Some(entry))),
+    };
     let old = match state.account_browser_sessions.lock() {
-        Ok(mut sessions) => sessions.insert(task_id.to_string(), entry),
+        Ok(mut sessions) => sessions.insert(task_id.to_string(), slot),
         Err(_) => {
-            cleanup_account_browser_session(entry);
+            cleanup_account_browser_session_slot(slot);
             return Err(json_response(
                 500,
                 &ApiErrorBody {
@@ -4610,7 +4774,7 @@ fn insert_account_browser_session(
         }
     };
     if let Some(old) = old {
-        cleanup_account_browser_session(old);
+        cleanup_account_browser_session_slot(old);
     }
     Ok(())
 }
@@ -4623,10 +4787,10 @@ fn has_account_browser_session(state: &ApiState, task_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn take_account_browser_session(
-    state: &mut ApiState,
+fn take_account_browser_session_slot(
+    state: &ApiState,
     task_id: &str,
-) -> Option<AccountBrowserSessionEntry> {
+) -> Option<SessionSlot<AccountBrowserSessionEntry>> {
     state
         .account_browser_sessions
         .lock()
@@ -4634,8 +4798,38 @@ fn take_account_browser_session(
         .and_then(|mut sessions| sessions.remove(task_id))
 }
 
+fn remove_account_browser_session_slot_if_same(
+    state: &ApiState,
+    task_id: &str,
+    expected: &SessionSlot<AccountBrowserSessionEntry>,
+) {
+    if let Ok(mut sessions) = state.account_browser_sessions.lock() {
+        if sessions
+            .get(task_id)
+            .is_some_and(|current| Arc::ptr_eq(&current.entry, &expected.entry))
+        {
+            sessions.remove(task_id);
+        }
+    }
+}
+
+fn take_account_browser_session(
+    state: &mut ApiState,
+    task_id: &str,
+) -> Option<AccountBrowserSessionEntry> {
+    let slot = take_account_browser_session_slot(state, task_id)?;
+    slot.entry.lock().ok().and_then(|mut guard| guard.take())
+}
+
 fn cleanup_account_browser_session(entry: AccountBrowserSessionEntry) {
     let _ = entry.runtime.block_on(entry.session.cleanup());
+}
+
+fn cleanup_account_browser_session_slot(slot: SessionSlot<AccountBrowserSessionEntry>) {
+    let entry = slot.entry.lock().ok().and_then(|mut guard| guard.take());
+    if let Some(entry) = entry {
+        cleanup_account_browser_session(entry);
+    }
 }
 
 fn wait_for_account_browser_credentials_response(
@@ -4755,6 +4949,520 @@ pub fn reconcile_browser_sessions(state: &mut ApiState, now_unix: i64) {
     reconcile_registration_sessions(state, now_unix);
 }
 
+const RECONCILE_CDP_POLL_TIMEOUT: Duration = Duration::from_secs(3);
+const RECONCILE_FINALIZE_LOGIN_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn task_phase_is_terminal(phase: &crate::ServiceTaskPhase) -> bool {
+    matches!(
+        phase,
+        crate::ServiceTaskPhase::Completed
+            | crate::ServiceTaskPhase::Failed
+            | crate::ServiceTaskPhase::Cancelled
+    )
+}
+
+pub fn reconcile_browser_sessions_unlocked(shared_state: &Arc<StdMutex<ApiState>>, now_unix: i64) {
+    let (account_slots, registration_slots) = {
+        let Ok(mut state) = shared_state.lock() else {
+            return;
+        };
+        state.apply_background_task_snapshots();
+        let account_slots = state
+            .account_browser_sessions
+            .lock()
+            .map(|sessions| {
+                sessions
+                    .iter()
+                    .map(|(task_id, slot)| (task_id.clone(), slot.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let registration_slots = state
+            .registration_sessions
+            .lock()
+            .map(|sessions| {
+                sessions
+                    .iter()
+                    .map(|(task_id, slot)| (task_id.clone(), slot.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        (account_slots, registration_slots)
+    };
+
+    for (task_id, slot) in account_slots {
+        reconcile_account_browser_session_slot_unlocked(shared_state, &task_id, slot);
+    }
+    for (task_id, slot) in registration_slots {
+        reconcile_registration_session_slot_unlocked(shared_state, &task_id, slot, now_unix);
+    }
+}
+
+fn reconcile_account_browser_session_slot_unlocked(
+    shared_state: &Arc<StdMutex<ApiState>>,
+    task_id: &str,
+    slot: SessionSlot<AccountBrowserSessionEntry>,
+) {
+    // 严格遵守锁序：先拿单会话 slot 锁，再在短临界区内拿 ApiState 锁，避免阻塞 HTTP 与 AB-BA 死锁。
+    let Ok(mut guard) = slot.entry.try_lock() else {
+        return;
+    };
+    let Some(entry) = guard.take() else {
+        return;
+    };
+    let snapshot = shared_state
+        .lock()
+        .ok()
+        .and_then(|state| state.tasks.snapshot(task_id).ok());
+    let Some(snapshot) = snapshot else {
+        cleanup_account_browser_session(entry);
+        if let Ok(mut state) = shared_state.lock() {
+            remove_account_browser_session_slot_if_same(&state, task_id, &slot);
+            release_registration_slot(&mut state, task_id);
+        }
+        return;
+    };
+    if task_phase_is_terminal(&snapshot.phase) {
+        cleanup_account_browser_session(entry);
+        if let Ok(mut state) = shared_state.lock() {
+            remove_account_browser_session_slot_if_same(&state, task_id, &slot);
+            release_registration_slot(&mut state, task_id);
+        }
+        return;
+    }
+    if snapshot.cancel_requested {
+        cleanup_account_browser_session(entry);
+        if let Ok(mut state) = shared_state.lock() {
+            remove_account_browser_session_slot_if_same(&state, task_id, &slot);
+            let _ = cancel_task_with_registration_release(&mut state, task_id, "任务已取消");
+        }
+        return;
+    }
+    if !entry.session.is_active() {
+        cleanup_account_browser_session(entry);
+        if let Ok(mut state) = shared_state.lock() {
+            remove_account_browser_session_slot_if_same(&state, task_id, &slot);
+            let _ = cancel_task_with_registration_release(
+                &mut state,
+                task_id,
+                "用户已关闭浏览器，任务已取消",
+            );
+        }
+        return;
+    }
+
+    let waiting_for_captcha =
+        snapshot.waiting_for_input == Some(TaskUserInputKind::CaptchaCompleted);
+    if waiting_for_captcha {
+        let poll_result = entry.runtime.block_on(async {
+            tokio::time::timeout(
+                RECONCILE_CDP_POLL_TIMEOUT,
+                entry.session.automation().current_login_state(),
+            )
+            .await
+        });
+        match poll_result {
+            Ok(Ok(login_state)) => match account_browser_captcha_action(login_state) {
+                AccountBrowserCaptchaAction::PromptCredentials => {
+                    let keep_entry = if let Ok(mut state) = shared_state.lock() {
+                        let still_waiting = state.tasks.snapshot(task_id).ok().is_some_and(|s| {
+                            !task_phase_is_terminal(&s.phase)
+                                && !s.cancel_requested
+                                && s.waiting_for_input
+                                    == Some(TaskUserInputKind::CaptchaCompleted)
+                        });
+                        if still_waiting {
+                            let _ = state
+                                .tasks
+                                .discard_user_inputs(task_id, TaskUserInputKind::CaptchaCompleted);
+                            let _ = state.tasks.wait_for_user_input(
+                                task_id,
+                                TaskUserInputKind::NewBrowserCredentials,
+                                "邮箱或密码错误，请重新输入",
+                            );
+                            let _ = state.tasks.append_log(
+                                task_id,
+                                TaskLogLevel::Warning,
+                                "邮箱或密码错误，请重新输入",
+                            );
+                        }
+                        true
+                    } else {
+                        true
+                    };
+                    if keep_entry {
+                        *guard = Some(entry);
+                    }
+                    return;
+                }
+                AccountBrowserCaptchaAction::FinalizeLogin => {
+                    let email = account_browser_pending_email(&entry.context);
+                    match entry.runtime.block_on(async {
+                        tokio::time::timeout(
+                            RECONCILE_FINALIZE_LOGIN_TIMEOUT,
+                            entry.session.automation().finalize_login_result(email),
+                        )
+                        .await
+                    }) {
+                        Ok(Ok(login)) => {
+                            let mut cleanup_entry = None;
+                            let mut put_back = None;
+                            if let Ok(mut state) = shared_state.lock() {
+                                let current = state.tasks.snapshot(task_id).ok();
+                                let still_waiting = current.as_ref().is_some_and(|s| {
+                                    !task_phase_is_terminal(&s.phase)
+                                        && !s.cancel_requested
+                                        && s.waiting_for_input
+                                            == Some(TaskUserInputKind::CaptchaCompleted)
+                                });
+                                if still_waiting {
+                                    remove_account_browser_session_slot_if_same(
+                                        &state, task_id, &slot,
+                                    );
+                                    let _ = state.tasks.discard_user_inputs(
+                                        task_id,
+                                        TaskUserInputKind::CaptchaCompleted,
+                                    );
+                                    let message = "已自动检测到 reCAPTCHA 完成，继续登录流程";
+                                    let _ = state.tasks.resume_waiting_task(task_id, message);
+                                    let _ = state.tasks.append_log(
+                                        task_id,
+                                        TaskLogLevel::Info,
+                                        message,
+                                    );
+                                    let owned_task_id = task_id.to_string();
+                                    let job = ApiBackgroundJob::new(
+                                        "account-browser-resume",
+                                        move |shared_state| {
+                                            let Ok(mut worker_state) = shared_state
+                                                .lock()
+                                                .map(|state| state.background_worker_clone())
+                                            else {
+                                                cleanup_account_browser_session(entry);
+                                                return;
+                                            };
+                                            let _ =
+                                                continue_account_browser_session_from_login_result(
+                                                    &mut worker_state,
+                                                    &owned_task_id,
+                                                    entry,
+                                                    login,
+                                                );
+                                        },
+                                    );
+                                    if let Err(response) = state.enqueue_background_job(job) {
+                                        fail_tracked_task(&mut state, Some(task_id), response.body);
+                                    }
+                                } else if current.as_ref().is_none_or(|s| {
+                                    task_phase_is_terminal(&s.phase) || s.cancel_requested
+                                }) {
+                                    remove_account_browser_session_slot_if_same(
+                                        &state, task_id, &slot,
+                                    );
+                                    cleanup_entry = Some(entry);
+                                } else {
+                                    put_back = Some(entry);
+                                }
+                            } else {
+                                put_back = Some(entry);
+                            }
+                            if let Some(entry) = put_back {
+                                *guard = Some(entry);
+                            } else if let Some(entry) = cleanup_entry {
+                                cleanup_account_browser_session(entry);
+                            }
+                            return;
+                        }
+                        Ok(Err(error)) => {
+                            cleanup_account_browser_session(entry);
+                            if let Ok(mut state) = shared_state.lock() {
+                                remove_account_browser_session_slot_if_same(&state, task_id, &slot);
+                                fail_tracked_task(&mut state, Some(task_id), error.to_string());
+                            }
+                            return;
+                        }
+                        Err(_) => {
+                            // 瞬时超时保留会话，下一轮继续检查。
+                        }
+                    }
+                }
+                AccountBrowserCaptchaAction::ResumeAutomation => {
+                    let mut cleanup_entry = None;
+                    let mut put_back = None;
+                    if let Ok(mut state) = shared_state.lock() {
+                        let current = state.tasks.snapshot(task_id).ok();
+                        let still_waiting = current.as_ref().is_some_and(|s| {
+                            !task_phase_is_terminal(&s.phase)
+                                && !s.cancel_requested
+                                && s.waiting_for_input
+                                    == Some(TaskUserInputKind::CaptchaCompleted)
+                        });
+                        if still_waiting {
+                            remove_account_browser_session_slot_if_same(&state, task_id, &slot);
+                            let _ = state
+                                .tasks
+                                .discard_user_inputs(task_id, TaskUserInputKind::CaptchaCompleted);
+                            let message = "已自动检测到 reCAPTCHA 状态变化，继续登录流程";
+                            let _ = state.tasks.resume_waiting_task(task_id, message);
+                            let _ = state.tasks.append_log(task_id, TaskLogLevel::Info, message);
+                            let owned_task_id = task_id.to_string();
+                            let job = ApiBackgroundJob::new(
+                                "account-browser-resume",
+                                move |shared_state| {
+                                    let Ok(mut worker_state) = shared_state
+                                        .lock()
+                                        .map(|state| state.background_worker_clone())
+                                    else {
+                                        cleanup_account_browser_session(entry);
+                                        return;
+                                    };
+                                    let _ = continue_account_browser_session_response(
+                                        &mut worker_state,
+                                        &owned_task_id,
+                                        entry,
+                                    );
+                                },
+                            );
+                            if let Err(response) = state.enqueue_background_job(job) {
+                                fail_tracked_task(&mut state, Some(task_id), response.body);
+                            }
+                        } else if current
+                            .as_ref()
+                            .is_none_or(|s| task_phase_is_terminal(&s.phase) || s.cancel_requested)
+                        {
+                            remove_account_browser_session_slot_if_same(&state, task_id, &slot);
+                            cleanup_entry = Some(entry);
+                        } else {
+                            put_back = Some(entry);
+                        }
+                    } else {
+                        put_back = Some(entry);
+                    }
+                    if let Some(entry) = put_back {
+                        *guard = Some(entry);
+                    } else if let Some(entry) = cleanup_entry {
+                        cleanup_account_browser_session(entry);
+                    }
+                    return;
+                }
+                AccountBrowserCaptchaAction::KeepWaiting => {}
+            },
+            Ok(Err(_)) | Err(_) => {}
+        }
+    }
+
+    if entry.last_activity.elapsed() >= ACCOUNT_BROWSER_SESSION_TIMEOUT {
+        cleanup_account_browser_session(entry);
+        if let Ok(mut state) = shared_state.lock() {
+            remove_account_browser_session_slot_if_same(&state, task_id, &slot);
+            fail_tracked_task(&mut state, Some(task_id), "浏览器会话等待超时，已自动清理");
+        }
+    } else {
+        *guard = Some(entry);
+    }
+}
+
+fn reconcile_registration_session_slot_unlocked(
+    shared_state: &Arc<StdMutex<ApiState>>,
+    task_id: &str,
+    slot: SessionSlot<RegistrationSessionEntry>,
+    now_unix: i64,
+) {
+    let Ok(mut guard) = slot.entry.try_lock() else {
+        return;
+    };
+    let Some(entry) = guard.take() else {
+        return;
+    };
+    let snapshot = shared_state
+        .lock()
+        .ok()
+        .and_then(|state| state.tasks.snapshot(task_id).ok());
+    let Some(snapshot) = snapshot else {
+        cleanup_registration_session(entry);
+        if let Ok(mut state) = shared_state.lock() {
+            remove_registration_session_slot_if_same(&state, task_id, &slot);
+            release_registration_slot(&mut state, task_id);
+        }
+        return;
+    };
+    if task_phase_is_terminal(&snapshot.phase) {
+        cleanup_registration_session(entry);
+        if let Ok(mut state) = shared_state.lock() {
+            remove_registration_session_slot_if_same(&state, task_id, &slot);
+            release_registration_slot(&mut state, task_id);
+        }
+        return;
+    }
+    if snapshot.cancel_requested {
+        cleanup_registration_session(entry);
+        if let Ok(mut state) = shared_state.lock() {
+            remove_registration_session_slot_if_same(&state, task_id, &slot);
+            let _ = cancel_task_with_registration_release(&mut state, task_id, "注册任务已取消");
+        }
+        return;
+    }
+    if !entry.session.is_active() {
+        cleanup_registration_session(entry);
+        if let Ok(mut state) = shared_state.lock() {
+            remove_registration_session_slot_if_same(&state, task_id, &slot);
+            let _ = cancel_task_with_registration_release(
+                &mut state,
+                task_id,
+                "用户已关闭浏览器，注册任务已取消",
+            );
+        }
+        return;
+    }
+
+    let waiting_for_input = snapshot.waiting_for_input;
+    let wait_timeout = if waiting_for_input == Some(TaskUserInputKind::CaptchaCompleted) {
+        Duration::from_secs(RECAPTCHA_WAIT_SECONDS)
+    } else {
+        ACCOUNT_BROWSER_SESSION_TIMEOUT
+    };
+    if entry.last_activity.elapsed() >= wait_timeout {
+        cleanup_registration_session(entry);
+        if let Ok(mut state) = shared_state.lock() {
+            remove_registration_session_slot_if_same(&state, task_id, &slot);
+            fail_tracked_task(
+                &mut state,
+                Some(task_id),
+                if waiting_for_input == Some(TaskUserInputKind::CaptchaCompleted) {
+                    "reCAPTCHA 等待超时，浏览器会话已自动清理"
+                } else {
+                    "注册浏览器会话等待超时，已自动清理"
+                },
+            );
+        }
+        return;
+    }
+
+    let should_poll_browser = matches!(
+        waiting_for_input,
+        Some(TaskUserInputKind::CaptchaCompleted) | Some(TaskUserInputKind::EmailCode)
+    );
+    if !should_poll_browser {
+        *guard = Some(entry);
+        return;
+    }
+
+    let poll_result = entry.runtime.block_on(async {
+        tokio::time::timeout(
+            RECONCILE_CDP_POLL_TIMEOUT,
+            entry.session.automation().current_registration_state(),
+        )
+        .await
+    });
+    match poll_result {
+        Ok(Ok(registration_state))
+            if registration_session_poll_action(waiting_for_input, &registration_state)
+                == RegistrationSessionPollAction::KeepWaiting =>
+        {
+            *guard = Some(entry);
+        }
+        Ok(Ok(registration_state)) => {
+            let mut cleanup_entry = None;
+            let mut put_back = None;
+            if let Ok(mut state) = shared_state.lock() {
+                let current = state.tasks.snapshot(task_id).ok();
+                let still_waiting = current.as_ref().is_some_and(|s| {
+                    !task_phase_is_terminal(&s.phase)
+                        && !s.cancel_requested
+                        && s.waiting_for_input == waiting_for_input
+                });
+                if still_waiting {
+                    remove_registration_session_slot_if_same(&state, task_id, &slot);
+                    if let Some(kind) = waiting_for_input {
+                        let _ = state.tasks.discard_user_inputs(task_id, kind);
+                    }
+                    let message = registration_auto_resume_message(
+                        waiting_for_input,
+                        &registration_state,
+                    );
+                    let _ = state.tasks.resume_waiting_task(task_id, message);
+                    let _ = state
+                        .tasks
+                        .append_log(task_id, TaskLogLevel::Info, message);
+                    let owned_task_id = task_id.to_string();
+                    let job = ApiBackgroundJob::new(
+                        "account-registration-resume",
+                        move |shared_state| {
+                            let Ok(mut worker_state) = shared_state
+                                .lock()
+                                .map(|state| state.background_worker_clone())
+                            else {
+                                cleanup_registration_session(entry);
+                                return;
+                            };
+                            let _ = continue_registration_from_state_response(
+                                &mut worker_state,
+                                &owned_task_id,
+                                entry,
+                                registration_state,
+                                now_unix,
+                            );
+                        },
+                    );
+                    if let Err(response) = state.enqueue_background_job(job) {
+                        fail_tracked_task(&mut state, Some(task_id), response.body);
+                    }
+                } else if current
+                    .as_ref()
+                    .is_none_or(|s| task_phase_is_terminal(&s.phase) || s.cancel_requested)
+                {
+                    remove_registration_session_slot_if_same(&state, task_id, &slot);
+                    cleanup_entry = Some(entry);
+                } else {
+                    put_back = Some(entry);
+                }
+            } else {
+                put_back = Some(entry);
+            }
+            if let Some(entry) = put_back {
+                *guard = Some(entry);
+            } else if let Some(entry) = cleanup_entry {
+                cleanup_registration_session(entry);
+            }
+        }
+        Ok(Err(error)) => {
+            cleanup_registration_session(entry);
+            if let Ok(mut state) = shared_state.lock() {
+                remove_registration_session_slot_if_same(&state, task_id, &slot);
+                fail_tracked_task(&mut state, Some(task_id), error.to_string());
+            }
+        }
+        Err(_) => {
+            // 瞬时 CDP 轮询超时保留会话，下一轮继续检查。
+            *guard = Some(entry);
+        }
+    }
+}
+
+fn registration_auto_resume_message(
+    waiting_for_input: Option<TaskUserInputKind>,
+    registration_state: &CdpRegistrationState,
+) -> &'static str {
+    match (waiting_for_input, registration_state) {
+        (
+            Some(TaskUserInputKind::EmailCode),
+            CdpRegistrationState::AccountCreated | CdpRegistrationState::SubscriptionSucceeded,
+        ) => "已自动检测到邮箱验证完成，继续注册流程",
+        (Some(TaskUserInputKind::EmailCode), CdpRegistrationState::ChallengeRequired) => {
+            "邮箱验证页面出现 reCAPTCHA，转入验证等待"
+        }
+        (Some(TaskUserInputKind::EmailCode), CdpRegistrationState::RegisteredEmail) => {
+            "检测到邮箱已注册，返回注册信息输入"
+        }
+        (
+            Some(TaskUserInputKind::CaptchaCompleted),
+            CdpRegistrationState::EmailVerificationRequired
+            | CdpRegistrationState::EmailVerificationFailed,
+        ) => "已自动检测到 reCAPTCHA 完成，转入邮箱验证码阶段",
+        _ => "已自动检测到 reCAPTCHA 完成，继续注册流程",
+    }
+}
+
 fn reconcile_registration_sessions(state: &mut ApiState, now_unix: i64) {
     let task_ids = state
         .registration_sessions
@@ -4865,6 +5573,7 @@ fn reconcile_registration_sessions(state: &mut ApiState, now_unix: i64) {
                     ) => "已自动检测到 reCAPTCHA 完成，转入邮箱验证码阶段",
                     _ => "已自动检测到 reCAPTCHA 完成，继续注册流程",
                 };
+                let _ = state.tasks.resume_waiting_task(&task_id, message);
                 let _ = state
                     .tasks
                     .append_log(&task_id, TaskLogLevel::Info, message);
@@ -4956,9 +5665,29 @@ fn reconcile_waiting_account_browser_captcha(
                     let _ = state
                         .tasks
                         .discard_user_inputs(task_id, TaskUserInputKind::CaptchaCompleted);
-                    let _ = continue_account_browser_session_from_login_result(
-                        state, task_id, entry, login,
-                    );
+                    let message = "已自动检测到 reCAPTCHA 完成，继续登录流程";
+                    let _ = state.tasks.resume_waiting_task(task_id, message);
+                    let _ = state.tasks.append_log(task_id, TaskLogLevel::Info, message);
+                    let owned_task_id = task_id.to_string();
+                    let job =
+                        ApiBackgroundJob::new("account-browser-resume", move |shared_state| {
+                            let Ok(mut worker_state) = shared_state
+                                .lock()
+                                .map(|state| state.background_worker_clone())
+                            else {
+                                cleanup_account_browser_session(entry);
+                                return;
+                            };
+                            let _ = continue_account_browser_session_from_login_result(
+                                &mut worker_state,
+                                &owned_task_id,
+                                entry,
+                                login,
+                            );
+                        });
+                    if let Err(response) = state.enqueue_background_job(job) {
+                        fail_tracked_task(state, Some(task_id), response.body);
+                    }
                 }
                 Err(error) => {
                     cleanup_account_browser_session(entry);
@@ -4971,7 +5700,27 @@ fn reconcile_waiting_account_browser_captcha(
             let _ = state
                 .tasks
                 .discard_user_inputs(task_id, TaskUserInputKind::CaptchaCompleted);
-            let _ = continue_account_browser_session_response(state, task_id, entry);
+            let message = "已自动检测到 reCAPTCHA 状态变化，继续登录流程";
+            let _ = state.tasks.resume_waiting_task(task_id, message);
+            let _ = state.tasks.append_log(task_id, TaskLogLevel::Info, message);
+            let owned_task_id = task_id.to_string();
+            let job = ApiBackgroundJob::new("account-browser-resume", move |shared_state| {
+                let Ok(mut worker_state) = shared_state
+                    .lock()
+                    .map(|state| state.background_worker_clone())
+                else {
+                    cleanup_account_browser_session(entry);
+                    return;
+                };
+                let _ = continue_account_browser_session_response(
+                    &mut worker_state,
+                    &owned_task_id,
+                    entry,
+                );
+            });
+            if let Err(response) = state.enqueue_background_job(job) {
+                fail_tracked_task(state, Some(task_id), response.body);
+            }
             true
         }
         Ok(AccountBrowserCaptchaAction::KeepWaiting) | Err(_) => {
@@ -5119,8 +5868,9 @@ fn handle_registration_error(
     task_id: Option<&str>,
     error: AccountRegistrationError,
 ) -> ApiResponse {
+    let has_active_session = task_id.is_some_and(|id| has_registration_session(state, id));
     match &error {
-        AccountRegistrationError::RegisteredEmail { email } => {
+        AccountRegistrationError::RegisteredEmail { email } if has_active_session => {
             if let Some(task_id) = task_id {
                 wait_for_registration_new_credentials(state, task_id, email);
                 let _ = state.tasks.append_log(
@@ -5130,7 +5880,7 @@ fn handle_registration_error(
                 );
             }
         }
-        AccountRegistrationError::EmailCodeRequired { email } => {
+        AccountRegistrationError::EmailCodeRequired { email } if has_active_session => {
             if let Some(task_id) = task_id {
                 wait_for_registration_email_code(state, task_id, email);
                 let _ = state.tasks.append_log(
@@ -5140,7 +5890,7 @@ fn handle_registration_error(
                 );
             }
         }
-        AccountRegistrationError::ChallengeRequired { .. } => {
+        AccountRegistrationError::ChallengeRequired { .. } if has_active_session => {
             if let Some(task_id) = task_id {
                 wait_for_registration_captcha(state, task_id);
                 let _ = state.tasks.append_log(
@@ -5203,8 +5953,15 @@ fn load_accounts(state: &ApiState) -> io::Result<overleaf_storage::AccountsDocum
 }
 
 fn load_display_accounts(state: &ApiState) -> io::Result<overleaf_storage::AccountsDocument> {
-    let mut document = load_accounts(state)?;
     let runtime = runtime_state(state);
+    load_display_accounts_with_runtime(state, &runtime)
+}
+
+fn load_display_accounts_with_runtime(
+    state: &ApiState,
+    runtime: &DashboardRuntimeState,
+) -> io::Result<overleaf_storage::AccountsDocument> {
+    let mut document = load_accounts(state)?;
     // 历史换号记录仍用于迁移；运行中标记仅依据本次浏览器身份。
     document.current = runtime.browser_account_email.as_deref().and_then(|email| {
         document.accounts.iter().find_map(|(alias, account)| {
@@ -5234,6 +5991,9 @@ fn extension_bridge_client_count(state: &ApiState) -> usize {
     let Some(executor) = state.extension_bridge_executor.as_ref() else {
         return 0;
     };
+    if let Some(count) = executor.extension_client_count_sync() {
+        return count;
+    }
 
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()

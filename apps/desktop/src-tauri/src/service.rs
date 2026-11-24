@@ -426,8 +426,8 @@ fn files_equal(left: &Path, right: &Path) -> io::Result<bool> {
     let mut left_buffer = [0_u8; 16 * 1024];
     let mut right_buffer = [0_u8; 16 * 1024];
     loop {
-        let left_read = left_file.read(&mut left_buffer)?;
-        let right_read = right_file.read(&mut right_buffer)?;
+        let left_read = read_full_chunk(&mut left_file, &mut left_buffer)?;
+        let right_read = read_full_chunk(&mut right_file, &mut right_buffer)?;
         if left_read != right_read {
             return Ok(false);
         }
@@ -438,6 +438,19 @@ fn files_equal(left: &Path, right: &Path) -> io::Result<bool> {
             return Ok(false);
         }
     }
+}
+
+fn read_full_chunk(file: &mut fs::File, buffer: &mut [u8]) -> io::Result<usize> {
+    let mut total = 0;
+    while total < buffer.len() {
+        match file.read(&mut buffer[total..]) {
+            Ok(0) => break,
+            Ok(read) => total += read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(total)
 }
 
 #[cfg(windows)]

@@ -202,33 +202,97 @@ fn parse_stripe_target_urls(
         serde_json::from_str(input).map_err(|error| StripeOopifError::InvalidTargetList {
             message: error.to_string(),
         })?;
-    let mut urls = Vec::new();
+    let mut ranked: Vec<(u8, String)> = Vec::new();
     for target in targets {
-        if target.target_type != "iframe" || !target_matches_component(&target.url, component) {
+        if target.target_type != "iframe" {
             continue;
         }
+        let Some(priority) = target_match_priority(&target.url, component) else {
+            continue;
+        };
         let Some(url) = target.websocket_url.as_deref().map(str::trim) else {
             continue;
         };
-        if !url.is_empty() && !urls.iter().any(|candidate| candidate == url) {
-            urls.push(url.to_string());
+        if !url.is_empty() && !ranked.iter().any(|(_, candidate)| candidate == url) {
+            ranked.push((priority, url.to_string()));
         }
     }
-    if urls.is_empty() {
+    if ranked.is_empty() {
         return Err(StripeOopifError::MissingTarget { component });
     }
-    Ok(urls)
+    ranked.sort_by_key(|(priority, _)| *priority);
+    Ok(ranked.into_iter().map(|(_, url)| url).collect())
 }
 
-fn target_matches_component(url: &str, component: &'static str) -> bool {
-    if url.contains(&format!("componentName={component}")) {
-        return true;
+fn target_match_priority(url: &str, component: &'static str) -> Option<u8> {
+    let lower = url.to_ascii_lowercase();
+    let exact = format!("componentname={component}");
+    let encoded = format!("componentname%3d{component}");
+    if lower.contains(&exact) || lower.contains(&encoded) {
+        return Some(0);
     }
-    if url.contains("componentName=") {
-        return false;
+    if lower.contains("componentname=") || lower.contains("componentname%3d") {
+        return None;
     }
-    // 重挂载时 URL 会变化，以字段可见性确认支付 iframe。
-    component == "payment"
+    if lower.contains(&format!("elements-inner-{component}")) {
+        return Some(1);
+    }
+    // 重挂载时 URL 会变化，仅在 Stripe 支付域 iframe 中以字段可见性确认支付框，
+    // 避免误连 reCAPTCHA 等非 Stripe iframe。
+    if component == "payment" && is_stripe_payment_fallback_url(&lower) {
+        return Some(2);
+    }
+    None
+}
+
+fn is_stripe_payment_fallback_url(lower_url: &str) -> bool {
+    (lower_url.contains("stripe.com") || lower_url.contains("stripe.network"))
+        && !lower_url.contains("controller")
+        && !lower_url.contains("m.stripe.network")
+}
+
+pub(crate) fn summarize_iframe_targets(input: &str) -> String {
+    let Ok(targets) = serde_json::from_str::<Vec<DebuggerTarget>>(input) else {
+        return String::new();
+    };
+    let mut items = Vec::new();
+    for target in targets {
+        if target.target_type != "iframe" {
+            continue;
+        }
+        let summary = sanitize_iframe_target_url(&target.url);
+        if !summary.is_empty() && !items.contains(&summary) {
+            items.push(summary);
+            if items.len() >= 6 {
+                break;
+            }
+        }
+    }
+    if items.is_empty() {
+        " [iframes=none]".to_string()
+    } else {
+        format!(" [iframes={}]", items.join(", "))
+    }
+}
+
+fn sanitize_iframe_target_url(url: &str) -> String {
+    let lower = url.to_ascii_lowercase();
+    let component = ["address", "payment", "card", "link"]
+        .into_iter()
+        .find(|name| {
+            lower.contains(&format!("componentname={name}"))
+                || lower.contains(&format!("componentname%3d{name}"))
+        });
+    let base = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .trim();
+    let compact: String = base.chars().take(96).collect();
+    match component {
+        Some(name) => format!("{compact}#{name}"),
+        None => compact,
+    }
 }
 
 pub(crate) async fn fill_stripe_address_oopif_frame(

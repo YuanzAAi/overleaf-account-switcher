@@ -248,6 +248,54 @@ pub fn remove_accounts_locally_in_store(
     Ok(report)
 }
 
+pub fn remove_accounts_locally_in_store_with_backend(
+    store: &AccountStore,
+    aliases_input: &str,
+    backend: &dyn SecretBackend,
+) -> Result<AccountRemovalReport, AccountActionError> {
+    let mut document = store.load().map_err(AccountActionError::from_io)?;
+    let planned = plan_account_removals(&document, aliases_input, false)?;
+    let removed_records = planned
+        .items
+        .iter()
+        .filter_map(|item| {
+            document
+                .accounts
+                .get(&item.alias)
+                .cloned()
+                .map(|record| (item.alias.clone(), record))
+        })
+        .collect::<Vec<_>>();
+    let report = remove_accounts_locally(&mut document, aliases_input)?;
+    if report.removed_count > 0 || report.current_cleared {
+        save_accounts_document(store.path(), &document).map_err(AccountActionError::from_io)?;
+        let retained_references = document
+            .accounts
+            .values()
+            .flat_map(|record| {
+                record
+                    .password_ref
+                    .iter()
+                    .chain(record.cookie_refs.values())
+                    .chain(record.git_token_ref.iter())
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        for (alias, record) in &removed_records {
+            let warnings = crate::account_secrets::delete_account_secrets(
+                alias,
+                record,
+                &retained_references,
+                backend,
+            );
+            for warning in warnings {
+                eprintln!("post-commit account secret cleanup failed: {warning}");
+            }
+        }
+    }
+    Ok(report)
+}
+
 fn removal_report(
     items: Vec<AccountRemovalItem>,
     removed_count: usize,

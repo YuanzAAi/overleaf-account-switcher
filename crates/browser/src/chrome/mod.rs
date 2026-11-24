@@ -14,20 +14,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use sysinfo::System;
+use sysinfo::{ProcessRefreshKind, RefreshKind, System, UpdateKind};
 use tokio::time::{sleep, timeout};
 
+use crate::cdp_login::{classify_registration_page_state, registration_payment_state_diagnostic};
 use crate::stripe_frame::{
-    fill_stripe_address_oopif_frame, fill_stripe_payment_oopif_field, StripeOopifError,
-    StripePaymentField,
+    fill_stripe_address_oopif_frame, fill_stripe_payment_oopif_field, summarize_iframe_targets,
+    StripeOopifError, StripePaymentField,
 };
 use crate::{
     parse_page_websocket_url, BrowserAutoLoginInput, BrowserAutoLoginResult, BrowserAutomation,
     BrowserAutomationError, BrowserAutomationResult, BrowserSessionPolicy, BrowserTaskKind,
-    CdpLoginAutomation, CdpLoginOptions, CdpLoginState, CdpSession, CdpWebSocketTransport,
-    ChromeLaunchOptions, ChromeLaunchPlan, ChromeProxyAttempt, ChromeProxyPolicy,
-    CredentialsLoginInput, GitTokenInput, GitTokenPageState, GitTokenResult, LoginResult,
-    PasswordChangeInput, PasswordChangeResult, RegistrationInput, RegistrationResult,
+    CdpLoginAutomation, CdpLoginOptions, CdpLoginState, CdpRegistrationState, CdpSession,
+    CdpWebSocketTransport, ChromeLaunchOptions, ChromeLaunchPlan, ChromeProxyAttempt,
+    ChromeProxyPolicy, CredentialsLoginInput, GitTokenInput, GitTokenPageState, GitTokenResult,
+    LoginResult, PasswordChangeInput, PasswordChangeResult, RegistrationInput, RegistrationResult,
     StripeAddressInput, StripeFrameActionResult, StripePaymentFramesResult, StripePaymentInput,
     CDP_LIST_ENDPOINT_PATH, OVERLEAF_LOGIN_URL, OVERLEAF_PROJECT_URL, OVERLEAF_REGISTER_URL,
     OVERLEAF_SETTINGS_URL,
@@ -41,11 +42,13 @@ pub const DEFAULT_CHROME_STARTUP_TIMEOUT_MS: u64 = 15_000;
 pub const DEFAULT_CHROME_STARTUP_POLL_MS: u64 = 250;
 pub const DEFAULT_CHROME_EXIT_WAIT_MS: u64 = 5_000;
 const MAX_DEBUGGER_HTTP_RESPONSE_BYTES: usize = 1024 * 1024;
-const STRIPE_TARGET_WAIT_ATTEMPTS: usize = 60;
+const STRIPE_ADDRESS_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
+const STRIPE_PAYMENT_FIELD_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STRIPE_TARGET_WAIT_DELAY_MS: u64 = 250;
-const STRIPE_ADDRESS_FIELD_READY_RETRY_ATTEMPTS: usize = 2;
+const STRIPE_PAGE_STATE_CHECK_INTERVAL: Duration = Duration::from_secs(3);
+const STRIPE_ADDRESS_FIELD_READY_RETRY_ATTEMPTS: usize = 6;
 // 支付 iframe 可能已创建，但重新挂载的输入字段尚未就绪。
-const STRIPE_PAYMENT_FIELD_READY_RETRY_ATTEMPTS: usize = 20;
+const STRIPE_PAYMENT_FIELD_READY_RETRY_ATTEMPTS: usize = 60;
 const COOKIE_LOGIN_STATUS_CHECKS: usize = 10;
 const COOKIE_LOGIN_POLL_DELAY_MS: u64 = 250;
 const CDP_CLEANUP_STEP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -680,16 +683,32 @@ impl LocalChromeCdpSession {
         address: StripeAddressInput,
         payment: StripePaymentInput,
     ) -> BrowserAutomationResult<StripePaymentFramesResult> {
+        self.fill_registration_payment_frames_with_cancel(address, payment, || false)
+            .await
+    }
+
+    pub async fn fill_registration_payment_frames_with_cancel<F>(
+        &self,
+        address: StripeAddressInput,
+        payment: StripePaymentInput,
+        should_cancel: F,
+    ) -> BrowserAutomationResult<StripePaymentFramesResult>
+    where
+        F: Fn() -> bool,
+    {
         let address_result = self
-            .fill_stripe_step(StripeFillStep::Address(&address))
+            .fill_stripe_step(StripeFillStep::Address(&address), &should_cancel)
             .await?;
         let mut payment_result = StripeFrameActionResult::empty_success();
         for field in StripePaymentField::ALL {
             payment_result.merge(
-                self.fill_stripe_step(StripeFillStep::Payment {
-                    input: &payment,
-                    field,
-                })
+                self.fill_stripe_step(
+                    StripeFillStep::Payment {
+                        input: &payment,
+                        field,
+                    },
+                    &should_cancel,
+                )
                 .await?,
             );
         }
@@ -699,62 +718,301 @@ impl LocalChromeCdpSession {
         })
     }
 
-    async fn fill_stripe_step(
+    pub async fn wait_for_registration_payment_confirmation_with_cancel<F>(
+        &self,
+        should_cancel: F,
+    ) -> BrowserAutomationResult<CdpRegistrationState>
+    where
+        F: Fn() -> bool,
+    {
+        match await_with_cancel_and_timeout(
+            self.automation()
+                .wait_for_registration_payment_confirmation_with_cancel(&should_cancel),
+            STRIPE_PAYMENT_FIELD_WAIT_TIMEOUT,
+            &should_cancel,
+            || self.is_active(),
+        )
+        .await
+        {
+            StepAwaitOutcome::Completed(result) => result,
+            StepAwaitOutcome::Canceled => Err(BrowserAutomationError::Canceled),
+            StepAwaitOutcome::TimedOut => Err(BrowserAutomationError::Timeout {
+                operation:
+                    "wait for Overleaf subscription confirmation after payment (step timed out)"
+                        .to_string(),
+            }),
+        }
+    }
+
+    async fn fill_stripe_step<F>(
         &self,
         step: StripeFillStep<'_>,
-    ) -> BrowserAutomationResult<StripeFrameActionResult> {
+        should_cancel: &F,
+    ) -> BrowserAutomationResult<StripeFrameActionResult>
+    where
+        F: Fn() -> bool,
+    {
+        let step_component = match step {
+            StripeFillStep::Address(_) => "address",
+            StripeFillStep::Payment { .. } => "payment",
+        };
+        let step_timeout = match step {
+            StripeFillStep::Address(_) => STRIPE_ADDRESS_WAIT_TIMEOUT,
+            StripeFillStep::Payment { .. } => STRIPE_PAYMENT_FIELD_WAIT_TIMEOUT,
+        };
+        let started_at = Instant::now();
+        let mut last_page_check = Instant::now();
+        let mut last_page_state = None;
         let mut field_retry_attempts = 0;
-        for attempt in 1..=STRIPE_TARGET_WAIT_ATTEMPTS {
-            let response = match fetch_debugger_targets(self.debug_port()) {
-                Ok(response) => response,
-                Err(_) if attempt < STRIPE_TARGET_WAIT_ATTEMPTS => {
-                    sleep(Duration::from_millis(STRIPE_TARGET_WAIT_DELAY_MS)).await;
+
+        loop {
+            if should_cancel() || !self.is_active() {
+                return Err(BrowserAutomationError::Canceled);
+            }
+            let remaining = step_timeout.saturating_sub(started_at.elapsed());
+            if remaining.is_zero() {
+                let page_diag = self
+                    .diagnostic_page_state_bounded(
+                        last_page_state,
+                        should_cancel,
+                        Duration::from_secs(2),
+                    )
+                    .await;
+                return Err(BrowserAutomationError::Timeout {
+                    operation: format!(
+                        "wait for Stripe payment frames: Stripe {step_component} OOPIF timed out{page_diag}"
+                    ),
+                });
+            }
+            let debug_port = self.debug_port();
+            let fetch_outcome = await_with_cancel_and_timeout(
+                tokio::task::spawn_blocking(move || fetch_debugger_targets(debug_port)),
+                remaining,
+                should_cancel,
+                || self.is_active(),
+            )
+            .await;
+            let response = match fetch_outcome {
+                StepAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
+                StepAwaitOutcome::TimedOut => {
+                    let page_diag = self
+                        .diagnostic_page_state_bounded(
+                            last_page_state,
+                            should_cancel,
+                            Duration::from_secs(2),
+                        )
+                        .await;
+                    return Err(BrowserAutomationError::Timeout {
+                        operation: format!(
+                            "wait for Stripe payment frames: read Chrome OOPIF targets timed out{page_diag}"
+                        ),
+                    });
+                }
+                StepAwaitOutcome::Completed(Ok(Ok(response))) => response,
+                StepAwaitOutcome::Completed(Ok(Err(_))) if !self.is_active() => {
+                    return Err(BrowserAutomationError::Canceled);
+                }
+                StepAwaitOutcome::Completed(Ok(Err(_))) if started_at.elapsed() < step_timeout => {
+                    let remaining = step_timeout.saturating_sub(started_at.elapsed());
+                    if matches!(
+                        await_with_cancel_and_timeout(
+                            sleep(remaining.min(Duration::from_millis(STRIPE_TARGET_WAIT_DELAY_MS))),
+                            remaining,
+                            should_cancel,
+                            || self.is_active(),
+                        )
+                        .await,
+                        StepAwaitOutcome::Canceled
+                    ) {
+                        return Err(BrowserAutomationError::Canceled);
+                    }
                     continue;
                 }
-                Err(error) => {
+                StepAwaitOutcome::Completed(Ok(Err(error))) => {
                     return Err(BrowserAutomationError::ExternalDriver {
                         message: format!("read Chrome OOPIF targets: {error}"),
                     });
                 }
+                StepAwaitOutcome::Completed(Err(error)) => {
+                    return Err(BrowserAutomationError::ExternalDriver {
+                        message: format!("join Chrome OOPIF target fetch: {error}"),
+                    });
+                }
             };
             let targets_json = debugger_http_response_body(&response);
-            let fill_result = match step {
+            let remaining = step_timeout.saturating_sub(started_at.elapsed());
+            let fill_outcome = match step {
                 StripeFillStep::Address(input) => {
-                    fill_stripe_address_oopif_frame(targets_json, input).await
+                    await_with_cancel_and_timeout(
+                        fill_stripe_address_oopif_frame(targets_json, input),
+                        remaining,
+                        should_cancel,
+                        || self.is_active(),
+                    )
+                    .await
                 }
                 StripeFillStep::Payment { input, field } => {
-                    fill_stripe_payment_oopif_field(targets_json, input, field).await
+                    await_with_cancel_and_timeout(
+                        fill_stripe_payment_oopif_field(targets_json, input, field),
+                        remaining,
+                        should_cancel,
+                        || self.is_active(),
+                    )
+                    .await
+                }
+            };
+            let fill_result = match fill_outcome {
+                StepAwaitOutcome::Completed(result) => result,
+                StepAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
+                StepAwaitOutcome::TimedOut => {
+                    let page_diag = self
+                        .diagnostic_page_state_bounded(
+                            last_page_state,
+                            should_cancel,
+                            Duration::from_secs(2),
+                        )
+                        .await;
+                    let iframe_diag = summarize_iframe_targets(targets_json);
+                    return Err(BrowserAutomationError::Timeout {
+                        operation: format!(
+                            "wait for Stripe payment frames: Stripe {step_component} OOPIF operation timed out{page_diag}{iframe_diag}"
+                        ),
+                    });
                 }
             };
             match fill_result {
                 Ok(result) => return Ok(result),
-                Err(error)
-                    if stripe_field_error_is_retryable(&error, field_retry_attempts)
-                        && attempt < STRIPE_TARGET_WAIT_ATTEMPTS =>
-                {
-                    field_retry_attempts += 1;
-                    sleep(Duration::from_millis(STRIPE_TARGET_WAIT_DELAY_MS)).await;
-                }
-                Err(error)
-                    if stripe_target_error_is_retryable(&error)
-                        && attempt < STRIPE_TARGET_WAIT_ATTEMPTS =>
-                {
-                    sleep(Duration::from_millis(STRIPE_TARGET_WAIT_DELAY_MS)).await;
-                }
-                Err(error) if stripe_target_error_is_retryable(&error) => {
-                    return Err(BrowserAutomationError::Timeout {
-                        operation: format!("wait for Stripe payment frames: {error}"),
-                    });
-                }
                 Err(error) => {
+                    if matches!(error, StripeOopifError::MissingTarget { .. })
+                        && last_page_check.elapsed() >= STRIPE_PAGE_STATE_CHECK_INTERVAL
+                    {
+                        last_page_check = Instant::now();
+                        let check_budget = step_timeout
+                            .saturating_sub(started_at.elapsed())
+                            .min(Duration::from_secs(3));
+                        match await_with_cancel_and_timeout(
+                            self.automation().current_page_state(),
+                            check_budget,
+                            should_cancel,
+                            || self.is_active(),
+                        )
+                        .await
+                        {
+                            StepAwaitOutcome::Canceled => {
+                                return Err(BrowserAutomationError::Canceled);
+                            }
+                            StepAwaitOutcome::Completed(Ok(page_state)) => {
+                                if page_state.url.to_ascii_lowercase().contains("/login") {
+                                    return Err(BrowserAutomationError::Navigation {
+                                        message: "registration session redirected to login while waiting for Stripe payment frames".to_string(),
+                                    });
+                                }
+                                if classify_registration_page_state(&page_state)
+                                    == CdpRegistrationState::ChallengeRequired
+                                {
+                                    return Err(BrowserAutomationError::ChallengeRequired {
+                                        challenge: "reCAPTCHA or robot verification".to_string(),
+                                    });
+                                }
+                                last_page_state = Some(page_state);
+                            }
+                            StepAwaitOutcome::Completed(Err(_)) | StepAwaitOutcome::TimedOut => {}
+                        }
+                    }
+
+                    let remaining = step_timeout.saturating_sub(started_at.elapsed());
+                    let field_retryable =
+                        stripe_field_error_is_retryable(&error, field_retry_attempts);
+                    if field_retryable && !remaining.is_zero() {
+                        field_retry_attempts += 1;
+                        if matches!(
+                            await_with_cancel_and_timeout(
+                                sleep(
+                                    remaining.min(Duration::from_millis(STRIPE_TARGET_WAIT_DELAY_MS))
+                                ),
+                                remaining,
+                                should_cancel,
+                                || self.is_active(),
+                            )
+                            .await,
+                            StepAwaitOutcome::Canceled
+                        ) {
+                            return Err(BrowserAutomationError::Canceled);
+                        }
+                        continue;
+                    }
+                    let target_retryable = stripe_target_error_is_retryable(&error);
+                    if target_retryable && !remaining.is_zero() {
+                        if matches!(
+                            await_with_cancel_and_timeout(
+                                sleep(
+                                    remaining.min(Duration::from_millis(STRIPE_TARGET_WAIT_DELAY_MS))
+                                ),
+                                remaining,
+                                should_cancel,
+                                || self.is_active(),
+                            )
+                            .await,
+                            StepAwaitOutcome::Canceled
+                        ) {
+                            return Err(BrowserAutomationError::Canceled);
+                        }
+                        continue;
+                    }
+                    if target_retryable
+                        || (matches!(error, StripeOopifError::MissingField { .. })
+                            && remaining.is_zero())
+                    {
+                        let page_diag = self
+                            .diagnostic_page_state_bounded(
+                                last_page_state,
+                                should_cancel,
+                                Duration::from_secs(2),
+                            )
+                            .await;
+                        let iframe_diag = summarize_iframe_targets(targets_json);
+                        return Err(BrowserAutomationError::Timeout {
+                            operation: format!(
+                                "wait for Stripe payment frames: {error}{page_diag}{iframe_diag}"
+                            ),
+                        });
+                    }
                     return Err(BrowserAutomationError::ExternalDriver {
                         message: error.to_string(),
                     });
                 }
             }
         }
+    }
 
-        unreachable!("Stripe target wait loop always returns")
+    async fn diagnostic_page_state_bounded<F>(
+        &self,
+        existing: Option<crate::cdp::login::CdpLoginPageState>,
+        should_cancel: &F,
+        timeout: Duration,
+    ) -> String
+    where
+        F: Fn() -> bool,
+    {
+        let state = if let Some(state) = existing {
+            Some(state)
+        } else {
+            match await_with_cancel_and_timeout(
+                self.automation().current_page_state(),
+                timeout,
+                should_cancel,
+                || self.is_active(),
+            )
+            .await
+            {
+                StepAwaitOutcome::Completed(Ok(state)) => Some(state),
+                _ => None,
+            }
+        };
+        state
+            .as_ref()
+            .map(registration_payment_state_diagnostic)
+            .unwrap_or_default()
     }
 
     pub fn is_active(&self) -> bool {
@@ -773,6 +1031,47 @@ impl LocalChromeCdpSession {
         self.launched
             .as_ref()
             .expect("local chrome CDP session already cleaned up")
+    }
+}
+
+enum StepAwaitOutcome<T> {
+    Completed(T),
+    Canceled,
+    TimedOut,
+}
+
+async fn await_with_cancel_and_timeout<F, C, A, T>(
+    future: F,
+    timeout: Duration,
+    should_cancel: &C,
+    is_active: A,
+) -> StepAwaitOutcome<T>
+where
+    F: std::future::Future<Output = T>,
+    C: Fn() -> bool,
+    A: Fn() -> bool,
+{
+    if should_cancel() || !is_active() {
+        return StepAwaitOutcome::Canceled;
+    }
+    if timeout.is_zero() {
+        return StepAwaitOutcome::TimedOut;
+    }
+    let cancel_watch = async {
+        let mut ticks = 0u8;
+        loop {
+            sleep(Duration::from_millis(150)).await;
+            ticks = ticks.wrapping_add(1);
+            if should_cancel() || (ticks % 7 == 0 && !is_active()) {
+                return;
+            }
+        }
+    };
+    let timed = tokio::time::timeout(timeout, future);
+    match futures_util::future::select(std::pin::pin!(cancel_watch), std::pin::pin!(timed)).await {
+        futures_util::future::Either::Left(((), _)) => StepAwaitOutcome::Canceled,
+        futures_util::future::Either::Right((Ok(value), _)) => StepAwaitOutcome::Completed(value),
+        futures_util::future::Either::Right((Err(_), _)) => StepAwaitOutcome::TimedOut,
     }
 }
 
@@ -1190,14 +1489,20 @@ fn scoped_chrome_processes_running(profile_dir: &Path) -> bool {
     !scoped_chrome_process_ids(profile_dir).is_empty()
 }
 
+fn new_process_cmd_system() -> System {
+    System::new_with_specifics(
+        RefreshKind::new()
+            .with_processes(ProcessRefreshKind::new().with_cmd(UpdateKind::OnlyIfNotSet)),
+    )
+}
+
 fn scoped_chrome_process_ids(profile_dir: &Path) -> Vec<sysinfo::Pid> {
     let marker = profile_dir.to_string_lossy().to_ascii_lowercase();
     if marker.trim().is_empty() {
         return Vec::new();
     }
 
-    let mut system = System::new_all();
-    system.refresh_all();
+    let system = new_process_cmd_system();
     system
         .processes()
         .iter()
@@ -1209,17 +1514,57 @@ fn scoped_chrome_process_ids(profile_dir: &Path) -> Vec<sysinfo::Pid> {
 }
 
 fn terminate_scoped_chrome_processes(profile_dir: &Path) -> usize {
-    let process_ids = scoped_chrome_process_ids(profile_dir);
-    if process_ids.is_empty() {
+    let marker = profile_dir.to_string_lossy().to_ascii_lowercase();
+    if marker.trim().is_empty() {
         return 0;
     }
 
-    let mut system = System::new_all();
-    system.refresh_all();
-    process_ids
-        .into_iter()
-        .filter(|pid| system.process(*pid).is_some_and(|process| process.kill()))
+    let system = new_process_cmd_system();
+    system
+        .processes()
+        .values()
+        .filter(|process| {
+            let command_line = process.cmd().join(" ").to_ascii_lowercase();
+            command_line.contains(&marker) && process.kill()
+        })
         .count()
+}
+
+pub fn active_owned_chrome_profile_names(
+    tmp_dir: impl AsRef<Path>,
+) -> std::collections::BTreeSet<String> {
+    let mut active = std::collections::BTreeSet::new();
+    let Ok(entries) = fs::read_dir(tmp_dir.as_ref()) else {
+        return active;
+    };
+    let candidates = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_string();
+            if !crate::is_owned_temp_profile_name(&name) {
+                return None;
+            }
+            let marker = entry.path().to_string_lossy().to_ascii_lowercase();
+            (!marker.trim().is_empty()).then_some((name, marker))
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return active;
+    }
+
+    let system = new_process_cmd_system();
+    for process in system.processes().values() {
+        let command_line = process.cmd().join(" ").to_ascii_lowercase();
+        if command_line.is_empty() {
+            continue;
+        }
+        for (name, marker) in &candidates {
+            if command_line.contains(marker) {
+                active.insert(name.clone());
+            }
+        }
+    }
+    active
 }
 
 pub fn cleanup_owned_chrome_profile(profile_dir: impl AsRef<Path>) -> io::Result<usize> {

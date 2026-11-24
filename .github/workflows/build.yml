@@ -272,6 +272,12 @@ jobs:
           test -s overleaf-windows-x64-portable.zip
           test -s overleaf-macos-arm64-portable.zip
           test -s overleaf-macos-x64-portable.zip
+          sha256sum \
+            overleaf-windows-x64.exe \
+            overleaf-windows-x64-portable.zip \
+            overleaf-macos-arm64-portable.zip \
+            overleaf-macos-x64-portable.zip > SHA256SUMS
+          test -s SHA256SUMS
       - uses: softprops/action-gh-release@v3.0.3
         if: needs.prepare.outputs.existing != 'true'
         with:
@@ -287,6 +293,7 @@ jobs:
           files: |
             release/overleaf-windows-x64.exe
             release/*-portable.zip
+            release/SHA256SUMS
       - name: Replace existing release assets
         if: needs.prepare.outputs.existing == 'true'
         env:
@@ -294,7 +301,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          gh release upload "$RELEASE_TAG" release/*.exe release/*-portable.zip --clobber
+          gh release upload "$RELEASE_TAG" release/*.exe release/*-portable.zip release/SHA256SUMS --clobber
   verify-macos-release:
     name: Verify released macOS (${{ matrix.arch }})
     needs: [prepare, release]

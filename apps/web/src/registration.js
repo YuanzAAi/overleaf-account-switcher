@@ -566,6 +566,9 @@ export async function startRegistration(event) {
     state.registrationTaskIds = [payload.task_id];
     const report = await postJson(endpoints.registerAccount, payload);
     if (report.phase && !["completed", "failed", "cancelled"].includes(report.phase)) {
+      if (report.task_id) {
+        updateTasks([report], { incremental: true });
+      }
       setRegistrationStatus("试用任务已启动，进度见运行日志", "warning");
       return;
     }

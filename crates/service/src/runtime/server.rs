@@ -6,8 +6,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{
-    handle_api_request_with_body_mut, reconcile_browser_sessions, ApiErrorBody, ApiResponse,
-    ApiState, TaskSnapshot, TaskSnapshotFeed,
+    handle_api_request_with_body_mut, reconcile_browser_sessions_unlocked, ApiErrorBody,
+    ApiResponse, ApiState, TaskSnapshot, TaskSnapshotFeed,
 };
 
 const DEFAULT_HOST: &str = "127.0.0.1";
@@ -22,7 +22,8 @@ const TASK_EVENT_POLL_INTERVAL_MS: u64 = 1_000;
 pub fn run() -> io::Result<()> {
     let options = ServerOptions::from_args(env::args().skip(1));
     let listener = TcpListener::bind((options.host.as_str(), options.port))?;
-    let state = ApiState::from_environment();
+    let mut state = ApiState::from_environment();
+    state.enable_maintenance_loop();
     let task_snapshot_feed = state.tasks.snapshot_feed();
     let state = Arc::new(Mutex::new(state));
     let maintenance_state = Arc::clone(&state);
@@ -32,8 +33,8 @@ pub fn run() -> io::Result<()> {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs() as i64)
             .unwrap_or_default();
-        let jobs = if let Ok(mut state) = maintenance_state.lock() {
-            reconcile_browser_sessions(&mut state, now_unix);
+        reconcile_browser_sessions_unlocked(&maintenance_state, now_unix);
+        let jobs = if let Ok(state) = maintenance_state.lock() {
             state.take_background_jobs()
         } else {
             Vec::new()
@@ -469,9 +470,16 @@ fn handle_task_events_connection(
         return Ok(());
     }
 
+    let mut last_version = None;
     let mut last_payload = String::new();
     loop {
-        let payload = task_event_frame(&task_snapshot_feed.list_snapshots(), &last_payload)?;
+        let current_version = task_snapshot_feed.version();
+        let payload = if last_version == Some(current_version) {
+            task_event_heartbeat()
+        } else {
+            last_version = Some(current_version);
+            task_event_frame(&task_snapshot_feed.list_snapshots(), &last_payload)?
+        };
 
         stream.write_all(payload.as_bytes())?;
         stream.flush()?;

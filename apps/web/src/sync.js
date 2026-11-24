@@ -174,7 +174,7 @@ export function ensureTaskEventConnection(capabilities = null) {
     scheduleTaskFallbackSync();
     return;
   }
-  if (!state.taskEvents) {
+  if (!state.taskEvents || state.taskEvents.readyState === EventSource.CLOSED) {
     connectTaskEvents();
   }
 }
@@ -234,7 +234,10 @@ export function updateTasks(tasks, options = {}) {
     latestTaskSequence(state.tasks),
     latestTaskSequence(snapshots),
   );
-  syncRegistrationTaskStatus(state.tasks);
+  syncRegistrationTaskStatus(state.tasks, {
+    previousTasks,
+    replace: !options.incremental,
+  });
   syncBrowserCredentialRecoveryTask(state.tasks);
   renderTasks(state.tasks);
   syncTaskInputWindowFocus(state.tasks);
@@ -319,19 +322,49 @@ export function registrationTaskStatusInfo(task) {
   return { message: "试用任务进行中", tone: "info", clearAfter: 0, terminal: false };
 }
 
-export function syncRegistrationTaskStatus(tasks) {
+export function syncRegistrationTaskStatus(tasks, options = {}) {
   const taskList = (Array.isArray(tasks) ? tasks : []).filter(
     (task) => task && task.operation_kind === "account_registration",
   );
+  const previousTaskList = Array.isArray(options.previousTasks)
+    ? options.previousTasks.filter(
+        (task) => task && task.operation_kind === "account_registration",
+      )
+    : [];
   const submitting = Boolean(document.getElementById("registration-submit")?.dataset.registrationSubmitting);
   if (state.registrationTaskIds.length && !submitting) {
-    const ownTasks = state.registrationTaskIds.map((id) => taskList.find((task) => task.task_id === id));
-    if (ownTasks.every((task) => task && terminalTaskPhases.has(String(task.phase || "").toLowerCase()))) {
-      const succeeded = !state.registrationBatchHadStartFailure
-        && ownTasks.every((task) => String(task.phase || "").toLowerCase() === "completed");
-      state.registrationTaskIds = [];
-      state.registrationBatchHadStartFailure = false;
-      if (succeeded) resetRegistrationForm(true);
+    if (options.replace) {
+      const remainingIds = [];
+      for (const id of state.registrationTaskIds) {
+        if (taskList.some((task) => task.task_id === id)) {
+          remainingIds.push(id);
+          continue;
+        }
+        const previous = previousTaskList.find((task) => task.task_id === id);
+        if (previous && terminalTaskPhases.has(String(previous.phase || "").toLowerCase())) {
+          // 仅对之前已处于终态且随后被服务端移除（如清除已结束任务）的 ID 做裁剪，
+          // 避免未推送的新任务或过期 refresh() 快照把活跃任务误判为已结束而提前解锁表单。
+          if (String(previous.phase || "").toLowerCase() !== "completed") {
+            state.registrationBatchHadStartFailure = true;
+          }
+          continue;
+        }
+        remainingIds.push(id);
+      }
+      state.registrationTaskIds = remainingIds;
+      if (!state.registrationTaskIds.length) {
+        state.registrationBatchHadStartFailure = false;
+      }
+    }
+    if (state.registrationTaskIds.length) {
+      const ownTasks = state.registrationTaskIds.map((id) => taskList.find((task) => task.task_id === id));
+      if (ownTasks.every((task) => task && terminalTaskPhases.has(String(task.phase || "").toLowerCase()))) {
+        const succeeded = !state.registrationBatchHadStartFailure
+          && ownTasks.every((task) => String(task.phase || "").toLowerCase() === "completed");
+        state.registrationTaskIds = [];
+        state.registrationBatchHadStartFailure = false;
+        if (succeeded) resetRegistrationForm(true);
+      }
     }
   }
   const trackedTaskId = String(state.registrationTaskId || "");
@@ -833,6 +866,7 @@ export function checkServiceHealth() {
   if (healthRequest) return healthRequest;
   // 日志流有独立连接，不能代替普通 HTTP 请求的响应检测。
   healthRequest = (async () => {
+    const previousBridgeConnected = extensionBridgeConnected();
     try {
       const [health, config] = await Promise.all([
         fetchJson(endpoints.health, 5000), fetchJson(endpoints.config, 5000),
@@ -847,6 +881,10 @@ export function checkServiceHealth() {
       renderStatus({ status: "unavailable" });
       return null;
     } finally {
+      if (previousBridgeConnected !== extensionBridgeConnected()) {
+        if (state.accounts.length) renderAccounts(state.accounts);
+        syncAccountTaskLocks();
+      }
       healthRequest = null;
     }
   })();
@@ -855,9 +893,16 @@ export function checkServiceHealth() {
 
 export function startServiceHealthMonitor() {
   const poll = async () => {
-    await checkServiceHealth();
+    if (!document.hidden) {
+      await checkServiceHealth();
+    }
     window.setTimeout(poll, 5000);
   };
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      void checkServiceHealth();
+    }
+  });
   window.setTimeout(poll, 5000);
 }
 

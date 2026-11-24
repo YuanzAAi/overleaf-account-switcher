@@ -68,11 +68,12 @@ pub use chrome_profile::{
     ENV_CHROME_USER_DATA_DIR,
 };
 pub use local_chrome::{
-    chrome_executable_candidates, cleanup_owned_chrome_profile, detect_chrome_executable,
-    find_available_debug_port, page_websocket_url_from_debugger_http_response,
-    LocalChromeAutomationConfig, LocalChromeAutomationError, LocalChromeBrowserAutomation,
-    LocalChromeCdpSession, DEFAULT_CDP_PORT_ATTEMPTS, DEFAULT_CDP_PORT_START,
-    DEFAULT_CHROME_EXIT_WAIT_MS, ENV_CDP_PORT_START, ENV_CHROME_PATH,
+    active_owned_chrome_profile_names, chrome_executable_candidates, cleanup_owned_chrome_profile,
+    detect_chrome_executable, find_available_debug_port,
+    page_websocket_url_from_debugger_http_response, LocalChromeAutomationConfig,
+    LocalChromeAutomationError, LocalChromeBrowserAutomation, LocalChromeCdpSession,
+    DEFAULT_CDP_PORT_ATTEMPTS, DEFAULT_CDP_PORT_START, DEFAULT_CHROME_EXIT_WAIT_MS,
+    ENV_CDP_PORT_START, ENV_CHROME_PATH,
 };
 pub mod runtime;
 pub use cdp::stripe as stripe_frame;

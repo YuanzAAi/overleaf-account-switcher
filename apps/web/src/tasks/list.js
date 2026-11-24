@@ -310,10 +310,11 @@ export function runtimeTaskLogBlock(task, activeRegistrationBatches = new Set())
     .filter(Boolean)
     .join("");
   const batchKey = registrationBatchKey(task);
+  const taskPhase = String(task.phase || "").toLowerCase();
   const compactRegistration =
     task.operation_kind === "account_registration" &&
-    (taskActivePhases().includes(String(task.phase || "").toLowerCase()) ||
-      (batchKey && activeRegistrationBatches.has(batchKey)));
+    (taskActivePhases().includes(taskPhase) ||
+      (batchKey && activeRegistrationBatches.has(batchKey) && taskPhase === "completed"));
   const latestLog = Array.isArray(task.logs) ? task.logs.at(-1) : null;
   const primaryMessage = compactRegistration && latestLog?.message ? latestLog.message : task.message || "";
   const progress = task.progress

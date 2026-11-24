@@ -375,6 +375,15 @@ fn find_card_index_with_backend(
     let mut matches = Vec::new();
 
     for (index, card) in document.cards.iter().enumerate() {
+        // 先用明文尾号剪枝，减少系统密钥库读取，也避免无关坏卡阻塞其它卡操作。
+        let stored_last_four = card.number_last_four.trim();
+        if !value.is_empty()
+            && !stored_last_four.is_empty()
+            && ((value.len() >= stored_last_four.len() && !value.ends_with(stored_last_four))
+                || (value.len() < stored_last_four.len() && !stored_last_four.ends_with(value)))
+        {
+            continue;
+        }
         let number = card_number_for_payment(card, backend)?;
         if number == value || (!value.is_empty() && number.ends_with(value)) {
             matches.push(index);

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use overleaf_core::{card::looks_like_payment_card_number, TaskEvent, TaskPhase, TaskStatus};
@@ -285,9 +286,14 @@ impl TaskRetryPayload {
 #[derive(Debug, Clone, Default)]
 pub struct TaskSnapshotFeed {
     snapshots: Arc<Mutex<Vec<TaskSnapshot>>>,
+    version: Arc<AtomicU64>,
 }
 
 impl TaskSnapshotFeed {
+    pub fn version(&self) -> u64 {
+        self.version.load(Ordering::Acquire)
+    }
+
     pub fn list_snapshots(&self) -> Vec<TaskSnapshot> {
         self.snapshots
             .lock()
@@ -300,6 +306,7 @@ impl TaskSnapshotFeed {
             .snapshots
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = snapshots;
+        self.version.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -390,6 +397,30 @@ impl TaskStateStore {
             .lock()
             .map(|requests| requests.contains(task_id.as_ref()))
             .unwrap_or(false)
+    }
+
+    pub(crate) fn cancel_requests_handle(&self) -> Arc<Mutex<BTreeSet<String>>> {
+        Arc::clone(&self.cancel_requests)
+    }
+
+    pub(crate) fn resume_waiting_task(
+        &mut self,
+        task_id: impl AsRef<str>,
+        message: impl Into<String>,
+    ) -> Result<TaskSnapshot, TaskStateError> {
+        let task_id = task_id.as_ref();
+        self.ensure_task_can_change_state(task_id)?;
+        let sequence = self.next_task_sequence();
+        let message = sanitize_task_text(message.into());
+        let task = self.task_mut(task_id)?;
+        task.phase = ServiceTaskPhase::Running;
+        task.message = message;
+        task.waiting_for_input = None;
+        refresh_available_actions(task);
+        task.last_sequence = sequence;
+        let snapshot = task.clone();
+        self.publish_snapshots();
+        Ok(snapshot)
     }
 
     pub(crate) fn apply_mirrored_snapshot(&mut self, mut snapshot: TaskSnapshot) {

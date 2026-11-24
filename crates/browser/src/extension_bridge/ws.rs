@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,6 +36,7 @@ pub struct ExtensionBridgeWebSocketServer {
 #[derive(Debug)]
 struct ExtensionBridgeWebSocketState {
     clients: Mutex<BTreeMap<u64, mpsc::UnboundedSender<Message>>>,
+    client_count: AtomicUsize,
     session: Mutex<ExtensionBridgeSession>,
     pending_responses: Mutex<BTreeMap<String, PendingWebSocketResponse>>,
     next_client_id: AtomicU64,
@@ -91,6 +92,7 @@ impl ExtensionBridgeWebSocketServer {
                 })?;
         let state = Arc::new(ExtensionBridgeWebSocketState {
             clients: Mutex::new(BTreeMap::new()),
+            client_count: AtomicUsize::new(0),
             session: Mutex::new(ExtensionBridgeSession::new()),
             pending_responses: Mutex::new(BTreeMap::new()),
             next_client_id: AtomicU64::new(1),
@@ -139,8 +141,12 @@ impl ExtensionBridgeWebSocketServer {
         self.local_addr
     }
 
+    pub fn connected_client_count(&self) -> usize {
+        self.state.client_count.load(Ordering::Acquire)
+    }
+
     pub async fn connected_clients(&self) -> usize {
-        self.state.clients.lock().await.len()
+        self.connected_client_count()
     }
 
     pub async fn is_connected(&self) -> bool {
@@ -307,11 +313,11 @@ async fn handle_client<S>(
 {
     let (mut writer, mut reader) = websocket.split();
     let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<Message>();
-    state
-        .clients
-        .lock()
-        .await
-        .insert(client_id, outbound_tx.clone());
+    {
+        let mut clients = state.clients.lock().await;
+        clients.insert(client_id, outbound_tx.clone());
+        state.client_count.store(clients.len(), Ordering::Release);
+    }
 
     let write_task = tokio::spawn(async move {
         while let Some(message) = outbound_rx.recv().await {
@@ -337,6 +343,7 @@ async fn handle_client<S>(
     let no_clients_left = {
         let mut clients = state.clients.lock().await;
         clients.remove(&client_id);
+        state.client_count.store(clients.len(), Ordering::Release);
         clients.is_empty()
     };
     if no_clients_left {

@@ -357,6 +357,58 @@ pub fn read_account_git_token_secret_for_recovery(
     read_secret(alias, "git_token", backend, reference, None, true)
 }
 
+pub fn delete_account_secrets(
+    alias: &str,
+    record: &AccountRecord,
+    retained_references: &[SecretReference],
+    backend: &dyn SecretBackend,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let mut delete_owned = |category: &'static str,
+                            cookie_name: Option<&str>,
+                            reference: &SecretReference| {
+        if !secret_reference_belongs_to_alias(alias, category, cookie_name, reference)
+            || retained_references.contains(reference)
+        {
+            return;
+        }
+        match backend.delete_secret(reference) {
+            Ok(()) | Err(SecretBackendError::SecretNotFound { .. }) => {}
+            Err(error) => {
+                warnings.push(format!("{alias}/{category}: {error}"));
+            }
+        }
+    };
+
+    if let Some(reference) = record.password_ref.as_ref() {
+        delete_owned("password", None, reference);
+    }
+    for (cookie_name, reference) in &record.cookie_refs {
+        delete_owned("cookie", Some(cookie_name.as_str()), reference);
+    }
+    if let Some(reference) = record.git_token_ref.as_ref() {
+        delete_owned("git_token", None, reference);
+    }
+    warnings
+}
+
+fn secret_reference_belongs_to_alias(
+    alias: &str,
+    category: &'static str,
+    cookie_name: Option<&str>,
+    reference: &SecretReference,
+) -> bool {
+    let key = match cookie_name {
+        Some(name) => account_cookie_secret_key(alias, name),
+        None if category == "password" => account_password_secret_key(alias),
+        None => account_git_token_secret_key(alias),
+    };
+    reference.category == category
+        && (reference.key == key
+            || legacy_account_secret_key(alias, category, cookie_name).as_deref()
+                == Some(reference.key.as_str()))
+}
+
 fn write_secret(
     alias: &str,
     category: &'static str,
@@ -392,16 +444,7 @@ fn read_secret(
     cookie_name: Option<&str>,
     recover_missing: bool,
 ) -> Result<String, AccountSecretStoreError> {
-    let key = match cookie_name {
-        Some(name) => account_cookie_secret_key(alias, name),
-        None if category == "password" => account_password_secret_key(alias),
-        None => account_git_token_secret_key(alias),
-    };
-    if reference.category != category
-        || (reference.key != key
-            && legacy_account_secret_key(alias, category, cookie_name).as_deref()
-                != Some(reference.key.as_str()))
-    {
+    if !secret_reference_belongs_to_alias(alias, category, cookie_name, reference) {
         return Err(AccountSecretStoreError::Missing {
             alias: alias.to_string(),
             category,

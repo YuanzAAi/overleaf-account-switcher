@@ -9,12 +9,17 @@ fn main() -> io::Result<()> {
     entries.sort_by_key(|entry| entry.file_name());
     let mut assets = String::from("const EXTENSION_ASSETS: &[(&str, &[u8])] = &[\n");
     for entry in entries {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
         if !entry.file_type()?.is_file() {
             return Err(io::Error::other("extension assets must be regular files"));
         }
+        println!("cargo:rerun-if-changed={}", entry.path().display());
         assets.push_str(&format!(
             "({:?}, include_bytes!({:?})),\n",
-            entry.file_name().to_string_lossy(),
+            name,
             entry.path(),
         ));
     }

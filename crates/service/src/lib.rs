@@ -19,9 +19,9 @@ pub use runtime::{
 pub mod api;
 pub use account_actions::{
     plan_account_removals, remove_accounts_locally, remove_accounts_locally_in_store,
-    update_local_passwords_in_store_with_backend, update_local_passwords_with_backend,
-    AccountActionError, AccountRemovalAction, AccountRemovalItem, AccountRemovalReport,
-    LocalPasswordUpdateItem, LocalPasswordUpdateReport,
+    remove_accounts_locally_in_store_with_backend, update_local_passwords_in_store_with_backend,
+    update_local_passwords_with_backend, AccountActionError, AccountRemovalAction,
+    AccountRemovalItem, AccountRemovalReport, LocalPasswordUpdateItem, LocalPasswordUpdateReport,
 };
 pub use account_browser::{
     open_account_browser_login_with_backend, open_account_browser_logins_in_store_with_backend,
@@ -99,8 +99,9 @@ pub use address_actions::{
     ReqwestMeiguodizhiAddressProvider,
 };
 pub use api::{
-    handle_api_request_with_body_mut, reconcile_browser_sessions, ApiBackgroundJob, ApiErrorBody,
-    ApiResponse, ApiState, ServiceApiRouteSpec, ServiceConfigBody, HEALTH_PATH, SERVICE_API_ROUTES,
+    handle_api_request_with_body_mut, reconcile_browser_sessions,
+    reconcile_browser_sessions_unlocked, ApiBackgroundJob, ApiErrorBody, ApiResponse, ApiState,
+    ServiceApiRouteSpec, ServiceConfigBody, HEALTH_PATH, SERVICE_API_ROUTES,
 };
 pub use password_policy::{
     validate_new_password, NewPasswordTooShort, MINIMUM_NEW_PASSWORD_LENGTH,

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex as StdMutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use overleaf_core::registration_trial_plan_code;
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,10 @@ const RUNTIME_NAVIGATION_RETRY_ATTEMPTS: usize = 80;
 const RUNTIME_NAVIGATION_RETRY_DELAY_MS: u64 = 250;
 const EMAIL_CODE_AUTO_ADVANCE_GRACE_CHECKS: usize = 10;
 const EMAIL_CODE_AUTO_ADVANCE_GRACE_DELAY_MS: u64 = 200;
+const SUBSCRIPTION_PAGE_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
+const SUBSCRIPTION_PAGE_POLL_DELAY_MS: u64 = 500;
+const SUBSCRIPTION_PAGE_RENAVIGATE_AFTER: Duration = Duration::from_secs(5);
+const PAYMENT_CONFIRMATION_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 
 static CAPTCHA_WAITER_ID: AtomicU64 = AtomicU64::new(1);
 static CAPTCHA_WAIT_STATE: OnceLock<StdMutex<CaptchaWaitState>> = OnceLock::new();
@@ -94,6 +98,10 @@ pub struct CdpLoginPageState {
     pub recaptcha_visible_count: usize,
     #[serde(default)]
     pub recaptcha_challenge_count: usize,
+    #[serde(default)]
+    pub ready_state: String,
+    #[serde(default)]
+    pub stripe_iframe_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -331,45 +339,186 @@ where
         &self,
         trial_days: u32,
     ) -> BrowserAutomationResult<CdpRegistrationState> {
+        self.open_registration_subscription_page_with_cancel(trial_days, || false)
+            .await
+    }
+
+    pub async fn open_registration_subscription_page_with_cancel<F>(
+        &self,
+        trial_days: u32,
+        should_cancel: F,
+    ) -> BrowserAutomationResult<CdpRegistrationState>
+    where
+        F: Fn() -> bool,
+    {
         let subscription_url = registration_subscription_url(trial_days).ok_or_else(|| {
             BrowserAutomationError::Other {
                 message: format!("unsupported trial_days for subscription page: {trial_days}"),
             }
         })?;
-        let mut session = self.session.lock().await;
+        let poll_delay_ms = self
+            .options
+            .poll_delay_ms
+            .min(SUBSCRIPTION_PAGE_POLL_DELAY_MS);
+        let use_wall_clock = poll_delay_ms > 0;
+        let max_checks = self.options.status_checks.max(1);
+        let started_at = Instant::now();
+        let remaining_budget = || {
+            use_wall_clock.then(|| SUBSCRIPTION_PAGE_WAIT_TIMEOUT.saturating_sub(started_at.elapsed()))
+        };
 
-        session
-            .navigate(subscription_url)
+        let mut session = match await_subscription_op(
+            self.session.lock(),
+            remaining_budget(),
+            &should_cancel,
+        )
+        .await
+        {
+            SubscriptionAwaitOutcome::Completed(session) => session,
+            SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
+            SubscriptionAwaitOutcome::TimedOut => {
+                return Err(BrowserAutomationError::Timeout {
+                    operation: "wait for Overleaf subscription page (session busy)".to_string(),
+                });
+            }
+        };
+
+        match await_subscription_op(
+            session.navigate(&subscription_url),
+            remaining_budget(),
+            &should_cancel,
+        )
+        .await
+        {
+            SubscriptionAwaitOutcome::Completed(result) => result.map_err(cdp_error)?,
+            SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
+            SubscriptionAwaitOutcome::TimedOut => {
+                return Err(BrowserAutomationError::Timeout {
+                    operation: "wait for Overleaf subscription page (navigation timed out)"
+                        .to_string(),
+                });
+            }
+        }
+
+        let mut checks = 0usize;
+        let mut renavigated = false;
+        let mut last_page_state = None;
+
+        loop {
+            if should_cancel() {
+                return Err(BrowserAutomationError::Canceled);
+            }
+            if use_wall_clock && started_at.elapsed() >= SUBSCRIPTION_PAGE_WAIT_TIMEOUT {
+                break;
+            }
+            let page_state = match await_subscription_op(
+                read_login_page_state(&mut session),
+                remaining_budget(),
+                &should_cancel,
+            )
             .await
-            .map_err(cdp_error)?;
-
-        for _ in 0..self.options.status_checks {
-            let page_state = read_login_page_state(&mut session).await?;
-            if page_state.url.to_ascii_lowercase().contains("/login") {
+            {
+                SubscriptionAwaitOutcome::Completed(result) => result?,
+                SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
+                SubscriptionAwaitOutcome::TimedOut => break,
+            };
+            let url = page_state.url.to_ascii_lowercase();
+            if url.contains("/login") {
                 return Err(BrowserAutomationError::Navigation {
                     message: "registration session redirected to login before subscription"
                         .to_string(),
                 });
             }
-            match classify_registration_page_state(&page_state) {
-                CdpRegistrationState::AccountCreated
-                | CdpRegistrationState::SubscriptionSucceeded => {
-                    return Ok(classify_registration_page_state(&page_state));
-                }
+            if page_state.robot_verification_blocked {
+                return Err(BrowserAutomationError::RobotVerificationBlocked);
+            }
+            if is_confirmed_active_subscription_page(&page_state) {
+                return Ok(CdpRegistrationState::SubscriptionSucceeded);
+            }
+            let state = classify_registration_page_state(&page_state);
+            match state {
                 CdpRegistrationState::ChallengeRequired => {
                     return Err(BrowserAutomationError::ChallengeRequired {
                         challenge: "reCAPTCHA or robot verification".to_string(),
                     });
                 }
-                CdpRegistrationState::Pending => {
-                    sleep_after_pending_check(self.options.poll_delay_ms).await;
+                CdpRegistrationState::RegisteredEmail
+                | CdpRegistrationState::EmailVerificationFailed => {
+                    return Ok(state);
                 }
-                state => return Ok(state),
+                CdpRegistrationState::EmailVerificationRequired
+                    if url.contains("confirm-email") =>
+                {
+                    return Ok(state);
+                }
+                _ => {}
+            }
+
+            // 必须等待浏览器真正进入订阅页且 Stripe 支付框架已挂载，
+            // 防止在确认邮箱后的旧页或仍在转圈加载时提前进入 OOPIF 填写超时。
+            if is_registration_subscription_new_url(&url) && page_state.stripe_iframe_count > 0 {
+                return Ok(CdpRegistrationState::AccountCreated);
+            }
+
+            // 若确认邮箱后的前端跳转覆盖了首次导航，等待稳定后重新导航到订阅页一次。
+            if use_wall_clock
+                && !renavigated
+                && !is_registration_subscription_new_url(&url)
+                && page_state.ready_state.eq_ignore_ascii_case("complete")
+                && started_at.elapsed() >= SUBSCRIPTION_PAGE_RENAVIGATE_AFTER
+            {
+                renavigated = true;
+                match await_subscription_op(
+                    session.navigate(&subscription_url),
+                    remaining_budget(),
+                    &should_cancel,
+                )
+                .await
+                {
+                    SubscriptionAwaitOutcome::Completed(result) => result.map_err(cdp_error)?,
+                    SubscriptionAwaitOutcome::Canceled => {
+                        return Err(BrowserAutomationError::Canceled);
+                    }
+                    SubscriptionAwaitOutcome::TimedOut => {
+                        last_page_state = Some(page_state);
+                        break;
+                    }
+                }
+            }
+
+            last_page_state = Some(page_state);
+            checks += 1;
+            let timed_out = if use_wall_clock {
+                started_at.elapsed() >= SUBSCRIPTION_PAGE_WAIT_TIMEOUT
+            } else {
+                checks >= max_checks
+            };
+            if timed_out {
+                break;
+            }
+            let sleep_budget = remaining_budget();
+            let sleep_delay = sleep_budget
+                .map(|remaining| remaining.min(Duration::from_millis(poll_delay_ms)))
+                .unwrap_or_else(|| Duration::from_millis(poll_delay_ms));
+            match await_subscription_op(
+                sleep_after_pending_check(sleep_delay.as_millis() as u64),
+                sleep_budget,
+                &should_cancel,
+            )
+            .await
+            {
+                SubscriptionAwaitOutcome::Completed(()) => {}
+                SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
+                SubscriptionAwaitOutcome::TimedOut => break,
             }
         }
 
+        let diag = last_page_state
+            .as_ref()
+            .map(registration_payment_state_diagnostic)
+            .unwrap_or_else(|| " (page did not respond before timeout)".to_string());
         Err(BrowserAutomationError::Timeout {
-            operation: "wait for Overleaf subscription page".to_string(),
+            operation: format!("wait for Overleaf subscription page{diag}"),
         })
     }
 
@@ -425,18 +574,93 @@ where
     pub async fn submit_registration_payment_and_wait_thank_you(
         &self,
     ) -> BrowserAutomationResult<CdpRegistrationState> {
-        let mut session = self.session.lock().await;
+        {
+            let mut session = self.session.lock().await;
+            let submit_result =
+                evaluate_action(&mut session, &submit_registration_payment_expression()).await?;
+            ensure_action_ok(submit_result)?;
+        }
 
-        let submit_result =
-            evaluate_action(&mut session, &submit_registration_payment_expression()).await?;
-        ensure_action_ok(submit_result)?;
+        self.wait_for_registration_payment_confirmation().await
+    }
+
+    pub async fn wait_for_registration_payment_confirmation(
+        &self,
+    ) -> BrowserAutomationResult<CdpRegistrationState> {
+        self.wait_for_registration_payment_confirmation_with_cancel(|| false)
+            .await
+    }
+
+    pub async fn wait_for_registration_payment_confirmation_with_cancel<F>(
+        &self,
+        should_cancel: F,
+    ) -> BrowserAutomationResult<CdpRegistrationState>
+    where
+        F: Fn() -> bool,
+    {
+        let use_wall_clock = self.options.poll_delay_ms > 0;
+        let max_checks = self.options.status_checks.max(1);
+        let started_at = Instant::now();
+        let remaining_budget = || {
+            use_wall_clock
+                .then(|| PAYMENT_CONFIRMATION_WAIT_TIMEOUT.saturating_sub(started_at.elapsed()))
+        };
+
+        let mut session = match await_subscription_op(
+            self.session.lock(),
+            remaining_budget(),
+            &should_cancel,
+        )
+        .await
+        {
+            SubscriptionAwaitOutcome::Completed(session) => session,
+            SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
+            SubscriptionAwaitOutcome::TimedOut => {
+                return Err(BrowserAutomationError::Timeout {
+                    operation:
+                        "wait for Overleaf subscription confirmation after payment (session busy)"
+                            .to_string(),
+                });
+            }
+        };
 
         let mut last_page_state = None;
-        for _ in 0..self.options.status_checks {
-            let page_state = read_login_page_state(&mut session).await?;
+        for _ in 0..max_checks {
+            if should_cancel() {
+                return Err(BrowserAutomationError::Canceled);
+            }
+            if use_wall_clock && started_at.elapsed() >= PAYMENT_CONFIRMATION_WAIT_TIMEOUT {
+                break;
+            }
+            let page_state = match await_subscription_op(
+                read_login_page_state(&mut session),
+                remaining_budget(),
+                &should_cancel,
+            )
+            .await
+            {
+                SubscriptionAwaitOutcome::Completed(result) => result?,
+                SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
+                SubscriptionAwaitOutcome::TimedOut => break,
+            };
             if is_registration_payment_post_checkout_candidate(&page_state) {
                 drop(session);
-                return self.open_registration_subscription_management().await;
+                return match await_subscription_op(
+                    self.open_registration_subscription_management(),
+                    remaining_budget(),
+                    &should_cancel,
+                )
+                .await
+                {
+                    SubscriptionAwaitOutcome::Completed(result) => result,
+                    SubscriptionAwaitOutcome::Canceled => Err(BrowserAutomationError::Canceled),
+                    SubscriptionAwaitOutcome::TimedOut => Err(BrowserAutomationError::Timeout {
+                        operation: format!(
+                            "wait for Overleaf subscription confirmation after payment{}",
+                            registration_payment_state_diagnostic(&page_state)
+                        ),
+                    }),
+                };
             }
             if let Some(error) = detect_registration_payment_error(&page_state) {
                 return Err(BrowserAutomationError::Other { message: error });
@@ -449,20 +673,36 @@ where
                     });
                 }
                 CdpRegistrationState::Pending | CdpRegistrationState::AccountCreated => {
-                    sleep_after_pending_check(self.options.poll_delay_ms).await;
+                    let sleep_budget = remaining_budget();
+                    let sleep_delay = sleep_budget
+                        .map(|remaining| {
+                            remaining.min(Duration::from_millis(self.options.poll_delay_ms))
+                        })
+                        .unwrap_or_else(|| Duration::from_millis(self.options.poll_delay_ms));
+                    match await_subscription_op(
+                        sleep_after_pending_check(sleep_delay.as_millis() as u64),
+                        sleep_budget,
+                        &should_cancel,
+                    )
+                    .await
+                    {
+                        SubscriptionAwaitOutcome::Completed(()) => {}
+                        SubscriptionAwaitOutcome::Canceled => {
+                            return Err(BrowserAutomationError::Canceled);
+                        }
+                        SubscriptionAwaitOutcome::TimedOut => break,
+                    }
                 }
                 state => return Ok(state),
             }
         }
 
+        let diag = last_page_state
+            .as_ref()
+            .map(registration_payment_state_diagnostic)
+            .unwrap_or_else(|| " (page did not respond before timeout)".to_string());
         Err(BrowserAutomationError::Timeout {
-            operation: format!(
-                "wait for Overleaf subscription confirmation after payment{}",
-                last_page_state
-                    .as_ref()
-                    .map(registration_payment_state_diagnostic)
-                    .unwrap_or_default()
-            ),
+            operation: format!("wait for Overleaf subscription confirmation after payment{diag}"),
         })
     }
 
@@ -1569,6 +1809,16 @@ pub fn login_page_state_expression() -> String {
       && (!rect || (rect.width > 0 && rect.height > 0));
   };
   const frames = Array.from(document.querySelectorAll('iframe'));
+  const stripeFrames = frames.filter(frame => {
+    const source = String(frame.src || '').toLowerCase();
+    const name = String(frame.name || '').toLowerCase();
+    const title = String(frame.title || '').toLowerCase();
+    return source.includes('stripe.com')
+      || source.includes('stripe.network')
+      || name.includes('stripe')
+      || title.includes('secure payment')
+      || title.includes('secure address');
+  });
   const recaptchaFrames = frames.filter(frame => {
     const source = String(frame.src || '').toLowerCase();
     const title = String(frame.title || '').toLowerCase();
@@ -1644,7 +1894,9 @@ pub fn login_page_state_expression() -> String {
     recaptcha_possible: possible,
     recaptcha_iframe_count: recaptchaFrames.length,
     recaptcha_visible_count: visibleFrames.length,
-    recaptcha_challenge_count: challengeFrames.length
+    recaptcha_challenge_count: challengeFrames.length,
+    ready_state: String(document.readyState || ''),
+    stripe_iframe_count: stripeFrames.length
   });
 })()"#
         .to_string()
@@ -1961,7 +2213,7 @@ pub fn classify_registration_page_state(page_state: &CdpLoginPageState) -> CdpRe
     if url.contains("thank-you")
         || text.contains("thank you for subscribing")
         || url.contains("/project")
-        || url.contains("/user/subscription/new")
+        || is_registration_subscription_new_url(&url)
         || text.contains("start your free trial")
         || text.contains("upgrade now")
     {
@@ -1979,7 +2231,7 @@ pub fn classify_registration_trial_purchase_page(
         return CdpTrialPurchaseAvailability::Unknown;
     };
     let url = page_state.url.to_ascii_lowercase();
-    if !url.contains("/user/subscription/new") {
+    if !is_registration_subscription_new_url(&url) {
         return CdpTrialPurchaseAvailability::Unknown;
     }
     let plan_code = plan_code.to_ascii_lowercase();
@@ -2087,7 +2339,57 @@ pub fn is_registration_payment_post_checkout_candidate(page_state: &CdpLoginPage
         || is_subscription_management_page(page_state)
 }
 
-fn registration_payment_state_diagnostic(page_state: &CdpLoginPageState) -> String {
+pub(crate) fn is_registration_subscription_new_url(url: &str) -> bool {
+    let url = url.to_ascii_lowercase();
+    url.contains("/user/subscription/new") || url.contains("/user-scalable/subscription/new")
+}
+
+enum SubscriptionAwaitOutcome<T> {
+    Completed(T),
+    Canceled,
+    TimedOut,
+}
+
+async fn await_subscription_op<F, C, T>(
+    future: F,
+    timeout: Option<Duration>,
+    should_cancel: &C,
+) -> SubscriptionAwaitOutcome<T>
+where
+    F: std::future::Future<Output = T>,
+    C: Fn() -> bool,
+{
+    let Some(timeout) = timeout else {
+        if should_cancel() {
+            return SubscriptionAwaitOutcome::Canceled;
+        }
+        return SubscriptionAwaitOutcome::Completed(future.await);
+    };
+    if should_cancel() {
+        return SubscriptionAwaitOutcome::Canceled;
+    }
+    if timeout.is_zero() {
+        return SubscriptionAwaitOutcome::TimedOut;
+    }
+    let cancel_watch = async {
+        loop {
+            if should_cancel() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+    };
+    let timed = tokio::time::timeout(timeout, future);
+    match futures_util::future::select(std::pin::pin!(cancel_watch), std::pin::pin!(timed)).await {
+        futures_util::future::Either::Left(((), _)) => SubscriptionAwaitOutcome::Canceled,
+        futures_util::future::Either::Right((Ok(value), _)) => {
+            SubscriptionAwaitOutcome::Completed(value)
+        }
+        futures_util::future::Either::Right((Err(_), _)) => SubscriptionAwaitOutcome::TimedOut,
+    }
+}
+
+pub(crate) fn registration_payment_state_diagnostic(page_state: &CdpLoginPageState) -> String {
     let title = page_state
         .title
         .split_whitespace()
@@ -2100,8 +2402,10 @@ fn registration_payment_state_diagnostic(page_state: &CdpLoginPageState) -> Stri
         .map(|message| message.split_whitespace().collect::<Vec<_>>().join(" "))
         .map(|message| message.chars().take(160).collect::<String>());
     format!(
-        " (path={}, title={title:?}, state={:?}, recaptcha_visible={}, visible_errors={}, first_visible_error={first_visible_error:?}, invalid_fields={})",
+        " (path={}, ready_state={:?}, stripe_iframes={}, title={title:?}, state={:?}, recaptcha_visible={}, visible_errors={}, first_visible_error={first_visible_error:?}, invalid_fields={})",
         registration_page_path(&page_state.url),
+        page_state.ready_state,
+        page_state.stripe_iframe_count,
         classify_registration_page_state(page_state),
         page_state.recaptcha_visible_count,
         page_state.visible_error_messages.len(),

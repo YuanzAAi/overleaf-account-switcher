@@ -614,7 +614,10 @@ where
     T: ProjectApiTransport,
 {
     ensure_migration_not_cancelled(progress.control)?;
-    if existing_owned_names.contains(&plan.project_name) {
+    // 链接共享协作按原 project_id 审计目标访问权限，不能被目标账号同名自有项目误跳过。
+    if plan.strategy != ProjectMigrationStrategy::LinkSharingCollaboration
+        && existing_owned_names.contains(&plan.project_name)
+    {
         if plan.strategy == ProjectMigrationStrategy::OwnedProject
             && active_project_id_exists(&evidence.target_projects, &plan.project_id)
         {

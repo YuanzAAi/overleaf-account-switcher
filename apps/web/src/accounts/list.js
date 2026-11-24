@@ -883,7 +883,7 @@ export function aliasesFromInputOrSelection(inputId, options = {}) {
   const explicit = document.getElementById(inputId).value.trim();
   if (explicit) return explicit;
 
-  const selected = selectedAliasesArray();
+  const selected = selectedAliasesInPickOrder();
   if (!selected.length) return "";
   if (options.single && selected.length !== 1) {
     throw new Error("请选择一个账号，或手动输入一个别名");

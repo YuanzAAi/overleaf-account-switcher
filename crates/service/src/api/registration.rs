@@ -16,6 +16,7 @@ pub(super) fn continue_registration_with_new_credentials_response(
     let input: RegistrationCredentialsTaskInput = match serde_json::from_str(value) {
         Ok(input) => input,
         Err(error) => {
+            entry.last_activity = Instant::now();
             let old_email = entry.context.email.clone();
             if let Err(response) = insert_registration_session(state, task_id, entry) {
                 return Some(response);
@@ -95,6 +96,7 @@ pub(super) fn continue_registration_with_new_credentials_response(
     let card_bin = entry.context.card_bin.clone();
     let one_card_per_account = entry.context.one_card_per_account;
     let password = SecretText::new(input.password);
+    entry.submitted_payment_card = None;
     entry.context = RegistrationSessionContext {
         alias_hint: alias_hint.clone(),
         existing_alias: None,
@@ -151,7 +153,11 @@ pub(super) fn continue_registration_after_captcha_response(
         state,
         task_id,
         entry.context.trial_days,
-        RegistrationState::DetectRegisteredEmail,
+        if entry.submitted_payment_card.is_some() {
+            RegistrationState::WaitThankYou
+        } else {
+            RegistrationState::DetectRegisteredEmail
+        },
     );
     let result = entry
         .runtime
@@ -364,6 +370,15 @@ pub(super) fn continue_registration_from_state_response(
     if state.tasks.cancellation_requested(task_id) {
         return cancel_active_registration_response(state, task_id, entry);
     }
+    if entry.submitted_payment_card.is_some() {
+        return continue_registration_after_submitted_payment_response(
+            state,
+            task_id,
+            entry,
+            registration_state,
+            now_unix,
+        );
+    }
     match registration_state {
         CdpRegistrationState::AccountCreated => {
             continue_registration_account_created_response(state, task_id, entry, now_unix)
@@ -386,6 +401,215 @@ pub(super) fn continue_registration_from_state_response(
     }
 }
 
+fn continue_registration_after_submitted_payment_response(
+    state: &mut ApiState,
+    task_id: &str,
+    mut entry: RegistrationSessionEntry,
+    registration_state: CdpRegistrationState,
+    now_unix: i64,
+) -> ApiResponse {
+    let card_store = CardStore::new(state.config.cards_path());
+    match registration_state {
+        CdpRegistrationState::ChallengeRequired | CdpRegistrationState::Pending => {
+            registration_waiting_for_captcha_response(state, task_id, entry)
+        }
+        CdpRegistrationState::SubscriptionSucceeded => {
+            set_registration_task_step(
+                state,
+                task_id,
+                entry.context.trial_days,
+                RegistrationState::WaitThankYou,
+            );
+            let _ = state
+                .tasks
+                .append_log(task_id, TaskLogLevel::Info, "支付成功，已确认订阅生效");
+            if let Some(card_number) = entry.submitted_payment_card.take() {
+                mark_registration_card_used(state, task_id, &card_store, &card_number);
+            }
+            let accept_extra_trial_offer = entry.context.trial_days == 21;
+            continue_registration_after_payment_success_response(
+                state,
+                task_id,
+                entry,
+                now_unix,
+                accept_extra_trial_offer,
+            )
+        }
+        CdpRegistrationState::AccountCreated => {
+            set_registration_task_step(
+                state,
+                task_id,
+                entry.context.trial_days,
+                RegistrationState::WaitThankYou,
+            );
+            let _ = state.tasks.append_log(
+                task_id,
+                TaskLogLevel::Info,
+                "验证已通过，正在确认已提交的支付结果（不会重复提交）",
+            );
+            let should_cancel = task_cancel_checker(state, task_id);
+            let confirmation_result = entry.runtime.block_on(
+                entry
+                    .session
+                    .wait_for_registration_payment_confirmation_with_cancel(&should_cancel),
+            );
+            if (state.tasks.cancellation_requested(task_id)
+                || matches!(confirmation_result, Err(BrowserAutomationError::Canceled))
+                || !entry.session.is_active())
+                && !matches!(
+                    confirmation_result,
+                    Ok(CdpRegistrationState::SubscriptionSucceeded)
+                )
+            {
+                return cancel_active_registration_response(state, task_id, entry);
+            }
+            match confirmation_result {
+                Ok(CdpRegistrationState::SubscriptionSucceeded) => {
+                    let _ = state.tasks.append_log(
+                        task_id,
+                        TaskLogLevel::Info,
+                        "支付成功，已确认订阅生效",
+                    );
+                    if let Some(card_number) = entry.submitted_payment_card.take() {
+                        mark_registration_card_used(state, task_id, &card_store, &card_number);
+                    }
+                    let accept_extra_trial_offer = entry.context.trial_days == 21;
+                    continue_registration_after_payment_success_response(
+                        state,
+                        task_id,
+                        entry,
+                        now_unix,
+                        accept_extra_trial_offer,
+                    )
+                }
+                Err(BrowserAutomationError::ChallengeRequired { .. }) => {
+                    registration_waiting_for_captcha_response(state, task_id, entry)
+                }
+                Err(error @ BrowserAutomationError::Other { .. }) => {
+                    let message = error.to_string();
+                    if let Some(card_number) = entry.submitted_payment_card.take() {
+                        mark_registration_card_failed(
+                            state,
+                            task_id,
+                            &card_store,
+                            &card_number,
+                            &message,
+                        );
+                    }
+                    let _ = entry.runtime.block_on(entry.session.cleanup());
+                    handle_registration_error(
+                        state,
+                        Some(task_id),
+                        AccountRegistrationError::from(error),
+                    )
+                }
+                Ok(other_state) => {
+                    entry.submitted_payment_card = None;
+                    let _ = entry.runtime.block_on(entry.session.cleanup());
+                    handle_registration_error(
+                        state,
+                        Some(task_id),
+                        AccountRegistrationError::Browser {
+                            message: format!(
+                                "payment did not reach subscription success: {other_state:?}"
+                            ),
+                        },
+                    )
+                }
+                Err(error) => {
+                    entry.submitted_payment_card = None;
+                    let _ = entry.runtime.block_on(entry.session.cleanup());
+                    handle_registration_error(
+                        state,
+                        Some(task_id),
+                        AccountRegistrationError::from(error),
+                    )
+                }
+            }
+        }
+        other_state => {
+            entry.submitted_payment_card = None;
+            let _ = entry.runtime.block_on(entry.session.cleanup());
+            handle_registration_error(
+                state,
+                Some(task_id),
+                AccountRegistrationError::Browser {
+                    message: format!(
+                        "payment did not reach subscription success: {other_state:?}"
+                    ),
+                },
+            )
+        }
+    }
+}
+
+fn mark_registration_card_used(
+    state: &mut ApiState,
+    task_id: &str,
+    card_store: &CardStore,
+    card_number: &str,
+) {
+    let commit_lock = state.account_commit_lock();
+    let mutation_result = commit_lock
+        .lock()
+        .map_err(|_| "account commit lock poisoned".to_string())
+        .and_then(|_guard| {
+            mark_card_used_in_store_with_backend(
+                card_store,
+                card_number,
+                state.secret_backend.as_ref(),
+            )
+            .map_err(|error| card_action_error_message(&error))
+        });
+    if let Err(error) = mutation_result {
+        let _ = state.tasks.append_log(
+            task_id,
+            TaskLogLevel::Warning,
+            format!("支付成功，但标记银行卡已使用失败: {error}"),
+        );
+    }
+}
+
+fn mark_registration_card_failed(
+    state: &mut ApiState,
+    task_id: &str,
+    card_store: &CardStore,
+    card_number: &str,
+    message: &str,
+) {
+    let commit_lock = state.account_commit_lock();
+    let mutation_result = commit_lock
+        .lock()
+        .map_err(|_| "account commit lock poisoned".to_string())
+        .and_then(|_guard| {
+            mark_card_failed_in_store_with_backend(
+                card_store,
+                card_number,
+                message,
+                state.secret_backend.as_ref(),
+            )
+            .map_err(|error| card_action_error_message(&error))
+        });
+    if let Err(card_error) = mutation_result {
+        let _ = state.tasks.append_log(
+            task_id,
+            TaskLogLevel::Warning,
+            format!("支付失败，且标记银行卡失败状态失败: {card_error}"),
+        );
+    }
+}
+
+fn task_cancel_checker(state: &ApiState, task_id: &str) -> impl Fn() -> bool {
+    let cancel_requests = state.tasks.cancel_requests_handle();
+    let owned_task_id = task_id.to_string();
+    move || {
+        cancel_requests
+            .lock()
+            .map(|requests| requests.contains(&owned_task_id))
+            .unwrap_or(false)
+    }
+}
+
 fn continue_registration_account_created_response(
     state: &mut ApiState,
     task_id: &str,
@@ -401,13 +625,19 @@ fn continue_registration_account_created_response(
         entry.context.trial_days,
         RegistrationState::OpenSubscription,
     );
+    let should_cancel = task_cancel_checker(state, task_id);
     let mut result = entry.runtime.block_on(
         entry
             .session
             .automation()
-            .open_registration_subscription_page(entry.context.trial_days),
+            .open_registration_subscription_page_with_cancel(
+                entry.context.trial_days,
+                &should_cancel,
+            ),
     );
-    if state.tasks.cancellation_requested(task_id) {
+    if state.tasks.cancellation_requested(task_id)
+        || matches!(result, Err(BrowserAutomationError::Canceled))
+    {
         return cancel_active_registration_response(state, task_id, entry);
     }
     if result
@@ -419,7 +649,7 @@ fn continue_registration_account_created_response(
         let _ = state.tasks.append_log(
             task_id,
             TaskLogLevel::Warning,
-            "确认邮箱后的页面仍在切换，保留当前浏览器并重试订阅页一次",
+            "订阅页或支付框架仍在加载，保留当前浏览器并刷新订阅页重试一次",
         );
         entry
             .runtime
@@ -428,9 +658,14 @@ fn continue_registration_account_created_response(
             entry
                 .session
                 .automation()
-                .open_registration_subscription_page(entry.context.trial_days),
+                .open_registration_subscription_page_with_cancel(
+                    entry.context.trial_days,
+                    &should_cancel,
+                ),
         );
-        if state.tasks.cancellation_requested(task_id) {
+        if state.tasks.cancellation_requested(task_id)
+            || matches!(result, Err(BrowserAutomationError::Canceled))
+        {
             return cancel_active_registration_response(state, task_id, entry);
         }
     }
@@ -442,7 +677,8 @@ fn continue_registration_account_created_response(
         Ok(CdpRegistrationState::SubscriptionSucceeded) => {
             continue_detected_registration_subscription_response(state, task_id, entry, now_unix)
         }
-        Ok(CdpRegistrationState::ChallengeRequired | CdpRegistrationState::Pending) => {
+        Ok(CdpRegistrationState::ChallengeRequired | CdpRegistrationState::Pending)
+        | Err(BrowserAutomationError::ChallengeRequired { .. }) => {
             registration_waiting_for_captcha_response(state, task_id, entry)
         }
         Ok(CdpRegistrationState::RegisteredEmail) => {
@@ -513,7 +749,11 @@ fn registration_waiting_for_new_credentials_response(
         state,
         task_id,
         entry.context.trial_days,
-        RegistrationState::DetectRegisteredEmail,
+        if entry.submitted_payment_card.is_some() {
+            RegistrationState::WaitThankYou
+        } else {
+            RegistrationState::DetectRegisteredEmail
+        },
     );
     if let Err(response) = insert_registration_session(state, task_id, entry) {
         return response;
@@ -552,9 +792,10 @@ fn registration_waiting_for_captcha_response(
 fn reinsert_registration_session_with_input_error(
     state: &mut ApiState,
     task_id: &str,
-    entry: RegistrationSessionEntry,
+    mut entry: RegistrationSessionEntry,
     message: impl Into<String>,
 ) -> ApiResponse {
+    entry.last_activity = Instant::now();
     let message = message.into();
     let old_email = entry.context.email.clone();
     if let Err(response) = insert_registration_session(state, task_id, entry) {
@@ -600,23 +841,20 @@ fn continue_registration_subscription_forms_response(
         )) {
             Ok(Ok(selection)) => selection,
             Ok(Err(error)) => {
-                let _ = state.tasks.append_log(
-                    task_id,
-                    TaskLogLevel::Warning,
-                    format!(
-                        "订阅页已打开，但还没有可用地址: {}",
-                        address_action_error_message(&error)
-                    ),
+                let message = format!(
+                    "订阅页已打开，但还没有可用地址: {}",
+                    address_action_error_message(&error)
                 );
-                if let Err(response) = insert_registration_session(state, task_id, entry) {
-                    return response;
-                }
-                return registration_waiting_response(state, task_id);
+                cleanup_registration_session(entry);
+                return handle_registration_error(
+                    state,
+                    Some(task_id),
+                    AccountRegistrationError::Browser { message },
+                );
             }
             Err(response) => {
-                if let Err(insert_response) = insert_registration_session(state, task_id, entry) {
-                    return insert_response;
-                }
+                cleanup_registration_session(entry);
+                fail_tracked_task(state, Some(task_id), response.body.clone());
                 return response;
             }
         }
@@ -665,7 +903,7 @@ fn continue_registration_subscription_forms_response(
 fn continue_registration_payment_with_card_retries_response(
     state: &mut ApiState,
     task_id: &str,
-    entry: RegistrationSessionEntry,
+    mut entry: RegistrationSessionEntry,
     address: StripeAddressInput,
     now_unix: i64,
 ) -> ApiResponse {
@@ -679,24 +917,16 @@ fn continue_registration_payment_with_card_retries_response(
         let card_document = match card_store.load() {
             Ok(document) => document,
             Err(error) => {
-                let _ = state.tasks.append_log(
-                    task_id,
-                    TaskLogLevel::Warning,
-                    format!("订阅页已打开，但无法读取银行卡库: {error}"),
-                );
-                if attempted_cards.is_empty() {
-                    if let Err(response) = insert_registration_session(state, task_id, entry) {
-                        return response;
-                    }
-                    return registration_waiting_response(state, task_id);
-                }
+                let message = if attempted_cards.is_empty() {
+                    format!("订阅页已打开，但无法读取银行卡库: {error}")
+                } else {
+                    "payment cards exhausted after retries".to_string()
+                };
                 let _ = entry.runtime.block_on(entry.session.cleanup());
                 return handle_registration_error(
                     state,
                     Some(task_id),
-                    AccountRegistrationError::Browser {
-                        message: "payment cards exhausted after retries".to_string(),
-                    },
+                    AccountRegistrationError::Browser { message },
                 );
             }
         };
@@ -737,34 +967,20 @@ fn continue_registration_payment_with_card_retries_response(
         let card = match selected {
             Ok(Some(card)) => card,
             Ok(None) => {
-                if attempted_cards.is_empty() {
+                let message = if attempted_cards.is_empty() {
                     if entry.context.one_card_per_account {
-                        let _ = entry.runtime.block_on(entry.session.cleanup());
-                        return handle_registration_error(
-                            state,
-                            Some(task_id),
-                            AccountRegistrationError::Browser {
-                                message: "no unreserved payment card is available".to_string(),
-                            },
-                        );
+                        "no unreserved payment card is available".to_string()
+                    } else {
+                        "当前卡片范围没有符合策略的可用银行卡".to_string()
                     }
-                    let _ = state.tasks.append_log(
-                        task_id,
-                        TaskLogLevel::Warning,
-                        "当前卡片范围没有符合策略的可用银行卡",
-                    );
-                    if let Err(response) = insert_registration_session(state, task_id, entry) {
-                        return response;
-                    }
-                    return registration_waiting_response(state, task_id);
-                }
+                } else {
+                    "payment failed and no unattempted card remains".to_string()
+                };
                 let _ = entry.runtime.block_on(entry.session.cleanup());
                 return handle_registration_error(
                     state,
                     Some(task_id),
-                    AccountRegistrationError::Browser {
-                        message: "payment failed and no unattempted card remains".to_string(),
-                    },
+                    AccountRegistrationError::Browser { message },
                 );
             }
             Err(error) => {
@@ -808,15 +1024,95 @@ fn continue_registration_payment_with_card_retries_response(
             cvc: card.cvc,
         };
         let selected_card_number = card.number.clone();
-        let fill_result = entry.runtime.block_on(
+        let should_cancel = task_cancel_checker(state, task_id);
+        let mut fill_result = entry.runtime.block_on(
             entry
                 .session
-                .fill_registration_payment_frames(address.clone(), payment),
+                .fill_registration_payment_frames_with_cancel(
+                    address.clone(),
+                    payment.clone(),
+                    &should_cancel,
+                ),
         );
         if state.tasks.cancellation_requested(task_id)
+            || matches!(fill_result, Err(BrowserAutomationError::Canceled))
             || (fill_result.is_err() && !entry.session.is_active())
         {
             return cancel_active_registration_response(state, task_id, entry);
+        }
+        // 提交支付前若 Stripe iframe 加载超时，保留当前浏览器并刷新订阅页重试一次。
+        if fill_result
+            .as_ref()
+            .err()
+            .is_some_and(registration_payment_frame_timeout_is_retryable)
+            && entry.session.is_active()
+        {
+            let _ = state.tasks.append_log(
+                task_id,
+                TaskLogLevel::Warning,
+                "订阅页支付框架加载超时，保留当前浏览器并刷新订阅页重试一次",
+            );
+            let reload_result = entry.runtime.block_on(
+                entry
+                    .session
+                    .automation()
+                    .open_registration_subscription_page_with_cancel(
+                        entry.context.trial_days,
+                        &should_cancel,
+                    ),
+            );
+            if state.tasks.cancellation_requested(task_id)
+                || matches!(reload_result, Err(BrowserAutomationError::Canceled))
+                || (reload_result.is_err() && !entry.session.is_active())
+            {
+                return cancel_active_registration_response(state, task_id, entry);
+            }
+            match reload_result {
+                Ok(CdpRegistrationState::AccountCreated) => {
+                    fill_result = entry.runtime.block_on(
+                        entry
+                            .session
+                            .fill_registration_payment_frames_with_cancel(
+                                address.clone(),
+                                payment,
+                                &should_cancel,
+                            ),
+                    );
+                    if state.tasks.cancellation_requested(task_id)
+                        || matches!(fill_result, Err(BrowserAutomationError::Canceled))
+                        || (fill_result.is_err() && !entry.session.is_active())
+                    {
+                        return cancel_active_registration_response(state, task_id, entry);
+                    }
+                }
+                Ok(CdpRegistrationState::SubscriptionSucceeded) => {
+                    return continue_detected_registration_subscription_response(
+                        state, task_id, entry, now_unix,
+                    );
+                }
+                Ok(CdpRegistrationState::ChallengeRequired | CdpRegistrationState::Pending)
+                | Err(BrowserAutomationError::ChallengeRequired { .. }) => {
+                    return registration_waiting_for_captcha_response(state, task_id, entry);
+                }
+                Ok(CdpRegistrationState::RegisteredEmail) => {
+                    let email = entry.context.email.clone();
+                    return registration_waiting_for_new_credentials_response(
+                        state, task_id, email, entry,
+                    );
+                }
+                Ok(
+                    CdpRegistrationState::EmailVerificationRequired
+                    | CdpRegistrationState::EmailVerificationFailed,
+                ) => {
+                    let email = entry.context.email.clone();
+                    return registration_waiting_for_email_code_response(
+                        state, task_id, email, entry,
+                    );
+                }
+                Err(reload_error) => {
+                    fill_result = Err(reload_error);
+                }
+            }
         }
         match fill_result {
             Ok(result) => {
@@ -829,6 +1125,9 @@ fn continue_registration_payment_with_card_retries_response(
                         result.payment.filled.len()
                     ),
                 );
+            }
+            Err(BrowserAutomationError::ChallengeRequired { .. }) => {
+                return registration_waiting_for_captcha_response(state, task_id, entry);
             }
             Err(error) => {
                 let _ = entry.runtime.block_on(entry.session.cleanup());
@@ -872,25 +1171,7 @@ fn continue_registration_payment_with_card_retries_response(
                     state
                         .tasks
                         .append_log(task_id, TaskLogLevel::Info, "支付成功，已确认订阅生效");
-                let commit_lock = state.account_commit_lock();
-                let mutation_result = commit_lock
-                    .lock()
-                    .map_err(|_| "account commit lock poisoned".to_string())
-                    .and_then(|_guard| {
-                        mark_card_used_in_store_with_backend(
-                            &card_store,
-                            &selected_card_number,
-                            state.secret_backend.as_ref(),
-                        )
-                        .map_err(|error| card_action_error_message(&error))
-                    });
-                if let Err(error) = mutation_result {
-                    let _ = state.tasks.append_log(
-                        task_id,
-                        TaskLogLevel::Warning,
-                        format!("支付成功，但标记银行卡已使用失败: {error}"),
-                    );
-                }
+                mark_registration_card_used(state, task_id, &card_store, &selected_card_number);
                 break;
             }
             Ok(other_state) => {
@@ -907,26 +1188,13 @@ fn continue_registration_payment_with_card_retries_response(
             }
             Err(error @ BrowserAutomationError::Other { .. }) => {
                 let message = error.to_string();
-                let commit_lock = state.account_commit_lock();
-                let mutation_result = commit_lock
-                    .lock()
-                    .map_err(|_| "account commit lock poisoned".to_string())
-                    .and_then(|_guard| {
-                        mark_card_failed_in_store_with_backend(
-                            &card_store,
-                            &selected_card_number,
-                            &message,
-                            state.secret_backend.as_ref(),
-                        )
-                        .map_err(|error| card_action_error_message(&error))
-                    });
-                if let Err(card_error) = mutation_result {
-                    let _ = state.tasks.append_log(
-                        task_id,
-                        TaskLogLevel::Warning,
-                        format!("支付失败，且标记银行卡失败状态失败: {card_error}"),
-                    );
-                }
+                mark_registration_card_failed(
+                    state,
+                    task_id,
+                    &card_store,
+                    &selected_card_number,
+                    &message,
+                );
                 if entry.context.one_card_per_account {
                     let _ = entry.runtime.block_on(entry.session.cleanup());
                     return handle_registration_error(
@@ -942,6 +1210,11 @@ fn continue_registration_payment_with_card_retries_response(
                     TaskLogLevel::Warning,
                     "当前银行卡支付失败，正在尝试下一张可用卡",
                 );
+            }
+            Err(BrowserAutomationError::ChallengeRequired { .. }) => {
+                // 支付已点击提交，保留已提交卡号与阶段，验证通过后仅确认原支付结果而不重复提交。
+                entry.submitted_payment_card = Some(selected_card_number);
+                return registration_waiting_for_captcha_response(state, task_id, entry);
             }
             Err(error) => {
                 let _ = entry.runtime.block_on(entry.session.cleanup());
@@ -961,6 +1234,16 @@ fn continue_registration_payment_with_card_retries_response(
         entry,
         now_unix,
         accept_extra_trial_offer,
+    )
+}
+
+fn registration_payment_frame_timeout_is_retryable(error: &BrowserAutomationError) -> bool {
+    matches!(
+        error,
+        BrowserAutomationError::Timeout { operation }
+            if operation
+                .to_ascii_lowercase()
+                .contains("wait for stripe payment frames")
     )
 }
 
@@ -1768,34 +2051,51 @@ fn register_existing_credentials_trial_response(
     let Some(local_chrome) = state.local_chrome_browser.clone() else {
         return browser_not_configured_response(state, Some(task_id));
     };
-    let (runtime, session) =
-        match open_account_browser_session(local_chrome, ChromeProxyAttempt::Primary) {
-            Ok(value) => value,
-            Err(response) => {
-                fail_tracked_task(state, Some(task_id), response.body.clone());
-                return response;
-            }
+    let owned_task_id = task_id.to_string();
+    let owned_alias_hint = alias_hint.map(str::to_string);
+    let owned_email = email.to_string();
+    let owned_password = SecretText::new(password);
+    let job = ApiBackgroundJob::new("account-existing-credentials-trial", move |shared_state| {
+        let Ok(mut worker_state) = shared_state
+            .lock()
+            .map(|state| state.background_worker_clone())
+        else {
+            return;
         };
-    continue_account_browser_session_response(
-        state,
-        task_id,
-        AccountBrowserSessionEntry {
-            runtime,
-            session,
-            context: AccountBrowserSessionContext::ExistingTrialCredentials {
-                alias_hint: alias_hint.map(str::to_string),
-                email: email.to_string(),
-                password: SecretText::new(password),
-                trial_days,
-                auto_fetch_git_token,
-                card_selection_strategy,
-                card_bin,
-                session_restart_count: 0,
-                now_unix,
+        let (runtime, session) =
+            match open_account_browser_session(local_chrome, ChromeProxyAttempt::Primary) {
+                Ok(value) => value,
+                Err(response) => {
+                    fail_tracked_task(&mut worker_state, Some(&owned_task_id), response.body);
+                    return;
+                }
+            };
+        let _ = continue_account_browser_session_response(
+            &mut worker_state,
+            &owned_task_id,
+            AccountBrowserSessionEntry {
+                runtime,
+                session,
+                context: AccountBrowserSessionContext::ExistingTrialCredentials {
+                    alias_hint: owned_alias_hint,
+                    email: owned_email,
+                    password: owned_password,
+                    trial_days,
+                    auto_fetch_git_token,
+                    card_selection_strategy,
+                    card_bin,
+                    session_restart_count: 0,
+                    now_unix,
+                },
+                last_activity: Instant::now(),
             },
-            last_activity: Instant::now(),
-        },
-    )
+        );
+    });
+    if let Err(response) = state.enqueue_background_job(job) {
+        fail_tracked_task(state, Some(task_id), response.body.clone());
+        return response;
+    }
+    registration_waiting_response(state, task_id)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1868,6 +2168,58 @@ fn register_existing_cookie_trial_response(
         return response;
     }
 
+    let Some(local_chrome) = state.local_chrome_browser.clone() else {
+        return browser_not_configured_response(state, Some(task_id));
+    };
+    let owned_task_id = task_id.to_string();
+    let owned_alias_hint = alias_hint.map(str::to_string);
+    let owned_alias = alias;
+    let owned_email = email.to_string();
+    let owned_session_cookie = session_cookie.to_string();
+    let job = ApiBackgroundJob::new("account-existing-cookie-trial", move |shared_state| {
+        let Ok(mut worker_state) = shared_state
+            .lock()
+            .map(|state| state.background_worker_clone())
+        else {
+            return;
+        };
+        let _ = run_existing_cookie_trial_worker(
+            &mut worker_state,
+            &owned_task_id,
+            owned_alias_hint.as_deref(),
+            &owned_alias,
+            &owned_email,
+            &owned_session_cookie,
+            trial_days,
+            auto_fetch_git_token,
+            card_selection_strategy,
+            card_bin,
+            local_chrome,
+            now_unix,
+        );
+    });
+    if let Err(response) = state.enqueue_background_job(job) {
+        fail_tracked_task(state, Some(task_id), response.body.clone());
+        return response;
+    }
+    registration_waiting_response(state, task_id)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_existing_cookie_trial_worker(
+    state: &mut ApiState,
+    task_id: &str,
+    alias_hint: Option<&str>,
+    alias: &str,
+    email: &str,
+    session_cookie: &str,
+    trial_days: u32,
+    auto_fetch_git_token: bool,
+    card_selection_strategy: CardSelectionStrategy,
+    card_bin: Option<String>,
+    local_chrome: Arc<LocalChromeBrowserAutomation>,
+    now_unix: i64,
+) -> ApiResponse {
     let cookies = BTreeMap::from([(
         OVERLEAF_SESSION_COOKIE_NAME.to_string(),
         session_cookie.to_string(),
@@ -1880,7 +2232,7 @@ fn register_existing_cookie_trial_response(
         }
     };
     let evidence = match runtime.block_on(validate_trial_cookie_eligibility(
-        state, task_id, &alias, email, &cookies, trial_days, now_unix,
+        state, task_id, alias, email, &cookies, trial_days, now_unix,
     )) {
         Ok(evidence) => evidence,
         Err(response) => return response,
@@ -1891,15 +2243,12 @@ fn register_existing_cookie_trial_response(
             return existing_account_trial_not_eligible_response(
                 state,
                 task_id,
-                &alias,
+                alias,
                 eligibility,
             );
         }
     };
 
-    let Some(local_chrome) = state.local_chrome_browser.clone() else {
-        return browser_not_configured_response(state, Some(task_id));
-    };
     let browser_result = runtime.block_on(async {
         let session = local_chrome
             .start_registration_cdp_session_for_attempt(ChromeProxyAttempt::Primary)
@@ -1936,7 +2285,7 @@ fn register_existing_cookie_trial_response(
     };
     let authenticated_cookies = cookies_to_map(&login_result.cookies);
     if let Err(error) = runtime.block_on(state.session_identity_validator.validate(
-        &alias,
+        alias,
         Some(email),
         &authenticated_cookies,
     )) {
@@ -1948,7 +2297,7 @@ fn register_existing_cookie_trial_response(
     let continuation = match preflight_continuation {
         Some(continuation) => continuation,
         None => match inspect_rendered_existing_trial_continuation(
-            state, task_id, &alias, &runtime, &session, trial_days, now_unix,
+            state, task_id, alias, &runtime, &session, trial_days, now_unix,
         ) {
             Ok(continuation) => continuation,
             Err(ExistingTrialResolutionError::NotEligible(eligibility)) => {
@@ -1956,7 +2305,7 @@ fn register_existing_cookie_trial_response(
                 return existing_account_trial_not_eligible_response(
                     state,
                     task_id,
-                    &alias,
+                    alias,
                     eligibility,
                 );
             }
@@ -1985,6 +2334,7 @@ fn register_existing_cookie_trial_response(
             card_bin,
             one_card_per_account: false,
         },
+        submitted_payment_card: None,
         last_activity: Instant::now(),
     };
     continue_existing_trial_response(state, task_id, entry, now_unix, continuation)
@@ -2228,11 +2578,66 @@ pub(super) fn register_existing_account_trial_response_inner(
         return json_response(400, &ApiErrorBody { error: message });
     };
 
+    let Some(local_chrome) = state.local_chrome_browser.clone() else {
+        return browser_not_configured_response(state, Some(task_id));
+    };
+    let owned_task_id = task_id.to_string();
+    let owned_alias = alias.to_string();
+    let allow_cookie_recovery = initialize_task;
+    let job = ApiBackgroundJob::new("account-existing-trial", move |shared_state| {
+        let Ok(mut worker_state) = shared_state
+            .lock()
+            .map(|state| state.background_worker_clone())
+        else {
+            return;
+        };
+        let _ = run_existing_account_trial_worker(
+            &mut worker_state,
+            &owned_task_id,
+            &owned_alias,
+            document,
+            record,
+            email,
+            trial_days,
+            auto_fetch_git_token,
+            card_selection_strategy,
+            card_bin,
+            local_chrome,
+            now_unix,
+            allow_cookie_recovery,
+        );
+        let follow_up_jobs = worker_state.take_background_jobs();
+        spawn_follow_up_jobs(&shared_state, &owned_task_id, follow_up_jobs);
+    });
+    if let Err(response) = state.enqueue_background_job(job) {
+        fail_tracked_task(state, Some(task_id), response.body.clone());
+        return response;
+    }
+    registration_waiting_response(state, task_id)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_existing_account_trial_worker(
+    state: &mut ApiState,
+    task_id: &str,
+    alias: &str,
+    document: AccountsDocument,
+    record: AccountRecord,
+    email: String,
+    trial_days: u32,
+    auto_fetch_git_token: bool,
+    card_selection_strategy: CardSelectionStrategy,
+    card_bin: Option<String>,
+    local_chrome: Arc<LocalChromeBrowserAutomation>,
+    now_unix: i64,
+    allow_cookie_recovery: bool,
+) -> ApiResponse {
     let cookies =
         match resolve_account_cookies_for_recovery(&record, alias, state.secret_backend.as_ref()) {
             Ok(cookies) => cookies,
             Err(error) => {
-                if initialize_task && matches!(error, AccountSecretStoreError::Missing { .. }) {
+                if allow_cookie_recovery && matches!(error, AccountSecretStoreError::Missing { .. })
+                {
                     return start_existing_account_trial_cookie_recovery_response(
                         state,
                         task_id,
@@ -2255,7 +2660,7 @@ pub(super) fn register_existing_account_trial_response_inner(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        if initialize_task {
+        if allow_cookie_recovery {
             return start_existing_account_trial_cookie_recovery_response(
                 state,
                 task_id,
@@ -2289,7 +2694,7 @@ pub(super) fn register_existing_account_trial_response_inner(
             trial_expiry: report.trial_expiry,
         },
         Ok(Err(error)) => {
-            if initialize_task && error.requires_cookie_recovery() {
+            if allow_cookie_recovery && error.requires_cookie_recovery() {
                 return start_existing_account_trial_cookie_recovery_response(
                     state,
                     task_id,
@@ -2319,9 +2724,6 @@ pub(super) fn register_existing_account_trial_response_inner(
                 eligibility,
             );
         }
-    };
-    let Some(local_chrome) = state.local_chrome_browser.clone() else {
-        return browser_not_configured_response(state, Some(task_id));
     };
     let runtime = match build_api_runtime() {
         Ok(runtime) => runtime,
@@ -2371,7 +2773,7 @@ pub(super) fn register_existing_account_trial_response_inner(
         &authenticated_cookies,
     )) {
         let _ = runtime.block_on(session.cleanup());
-        if initialize_task && error.requires_cookie_recovery() {
+        if allow_cookie_recovery && error.requires_cookie_recovery() {
             return start_existing_account_trial_cookie_recovery_response(
                 state,
                 task_id,
@@ -2427,6 +2829,7 @@ pub(super) fn register_existing_account_trial_response_inner(
             card_bin,
             one_card_per_account: false,
         },
+        submitted_payment_card: None,
         last_activity: Instant::now(),
     };
     continue_existing_trial_response(state, task_id, entry, now_unix, continuation)
@@ -2665,6 +3068,7 @@ fn register_account_with_local_chrome_session_response(
             card_bin,
             one_card_per_account,
         },
+        submitted_payment_card: None,
         last_activity: Instant::now(),
     };
     handle_registration_session_result(state, task_id, entry, result, now_unix)

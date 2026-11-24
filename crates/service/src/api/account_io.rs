@@ -17,8 +17,12 @@ pub(super) fn refresh_account_subscriptions_response(
             },
         );
     };
-    if let Err(response) = start_task_if_requested(state, Some(&task_id), "刷新账号订阅状态")
-    {
+    if let Err(response) = start_alias_batch_task(
+        state,
+        Some(&task_id),
+        "刷新账号订阅状态",
+        &request.aliases,
+    ) {
         return response;
     }
     let store = AccountStore::new(state.config.accounts_path());

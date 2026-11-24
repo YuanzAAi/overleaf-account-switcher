@@ -53,6 +53,10 @@ impl CdpTransport for CdpWebSocketTransport {
                 .map_err(|error| cdp_transport_error(format!("read CDP response: {error}")))?;
 
             if let Some(response) = response_from_message(message)? {
+                // 跳过已取消或超时命令的迟到响应，避免后续复用同一连接时因旧响应错位。
+                if response.id.is_some_and(|id| id < command.id) {
+                    continue;
+                }
                 return Ok(response);
             }
         }

@@ -152,7 +152,8 @@ pub struct RuntimeArtifactItem {
 }
 
 pub(super) fn preview_temp_profiles_response(state: &ApiState) -> ApiResponse {
-    match preview_owned_temp_profiles(&state.config.tmp_dir) {
+    let active_profiles = active_temp_profile_names(state);
+    match preview_owned_temp_profiles(&state.config.tmp_dir, &active_profiles) {
         Ok(preview) => json_response(200, &preview),
         Err(error) => io_error_response(error),
     }
@@ -173,10 +174,19 @@ pub(super) fn cleanup_temp_profiles_response(state: &ApiState, body: &str) -> Ap
         );
     }
 
-    match cleanup_owned_temp_profiles(&state.config.tmp_dir) {
+    let active_profiles = active_temp_profile_names(state);
+    match cleanup_owned_temp_profiles(&state.config.tmp_dir, &active_profiles) {
         Ok(report) => json_response(200, &report),
         Err(error) => io_error_response(error),
     }
+}
+
+fn active_temp_profile_names(state: &ApiState) -> BTreeSet<String> {
+    let mut active = state.active_browser_session_profile_names();
+    active.extend(overleaf_browser::active_owned_chrome_profile_names(
+        &state.config.tmp_dir,
+    ));
+    active
 }
 
 pub(super) fn cleanup_runtime_artifacts_response(state: &ApiState, body: &str) -> ApiResponse {
@@ -442,7 +452,10 @@ fn directory_size_bytes(path: &Path) -> u64 {
     directory_file_inventory(path).bytes
 }
 
-fn preview_owned_temp_profiles(tmp_dir: &Path) -> io::Result<RuntimeTempProfileCleanupPreview> {
+fn preview_owned_temp_profiles(
+    tmp_dir: &Path,
+    active_profiles: &BTreeSet<String>,
+) -> io::Result<RuntimeTempProfileCleanupPreview> {
     let mut preview = RuntimeTempProfileCleanupPreview {
         candidate_count: 0,
         candidate_bytes: 0,
@@ -468,6 +481,15 @@ fn preview_owned_temp_profiles(tmp_dir: &Path) -> io::Result<RuntimeTempProfileC
         if !is_owned_temp_profile_name(&name) {
             continue;
         }
+        if active_profiles.contains(&name) {
+            preview.items.push(RuntimeTempProfileCleanupItem {
+                profile_name: name,
+                status: "skipped_active_session",
+                bytes,
+                error: None,
+            });
+            continue;
+        }
 
         preview.candidate_count += 1;
         preview.candidate_bytes = preview.candidate_bytes.saturating_add(bytes);
@@ -482,7 +504,10 @@ fn preview_owned_temp_profiles(tmp_dir: &Path) -> io::Result<RuntimeTempProfileC
     Ok(preview)
 }
 
-fn cleanup_owned_temp_profiles(tmp_dir: &Path) -> io::Result<RuntimeTempProfileCleanupReport> {
+fn cleanup_owned_temp_profiles(
+    tmp_dir: &Path,
+    active_profiles: &BTreeSet<String>,
+) -> io::Result<RuntimeTempProfileCleanupReport> {
     let mut report = RuntimeTempProfileCleanupReport {
         removed_count: 0,
         failed_count: 0,
@@ -509,6 +534,15 @@ fn cleanup_owned_temp_profiles(tmp_dir: &Path) -> io::Result<RuntimeTempProfileC
         }
 
         let bytes = directory_size_bytes(&path);
+        if active_profiles.contains(&name) {
+            report.items.push(RuntimeTempProfileCleanupItem {
+                profile_name: name,
+                status: "skipped_active_session",
+                bytes,
+                error: None,
+            });
+            continue;
+        }
         match cleanup_owned_chrome_profile(&path) {
             Ok(_) => {
                 report.removed_count += 1;

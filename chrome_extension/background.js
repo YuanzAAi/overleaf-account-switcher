@@ -55,8 +55,8 @@ async function sendHandshake(reason) {
   }
 }
 
-// 使用chrome.alarms保持Service Worker活跃（缩短到5秒）
-chrome.alarms.create('keepalive', { periodInMinutes: 0.08 }); // 约5秒触发一次
+// 使用 chrome.alarms 保持 Service Worker 活跃（Chrome MV3 最小周期为 0.5 分钟）
+chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'keepalive') {
@@ -236,11 +236,17 @@ async function handleCommand(command) {
       case 'get_cookie_expiry':
         result = await getCookieExpiry();
         break;
+      case 'handshake_ack':
+        return { success: Boolean(command.success !== false) };
       case 'ping':
         return { success: true, message: 'pong' };
       default:
         console.error('未知指令:', command.action);
-        return { success: false, message: '未知指令' };
+        result = { success: false, message: '未知指令' };
+        if (!command.request_id) {
+          return result;
+        }
+        break;
     }
 
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -251,7 +257,11 @@ async function handleCommand(command) {
     return result;
   } catch (error) {
     console.error('处理指令时出错:', error);
-    return { success: false, message: error.message };
+    const result = { success: false, message: error.message };
+    if (command && command.request_id && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ ...result, request_id: command.request_id, action: command.action }));
+    }
+    return result;
   }
 }
 
@@ -334,14 +344,20 @@ function connectWebSocket() {
       }
       // 自动重连
       if (!reconnectTimer) {
-        reconnectTimer = setTimeout(connectWebSocket, RECONNECT_INTERVAL);
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connectWebSocket();
+        }, RECONNECT_INTERVAL);
       }
     };
   } catch (error) {
     console.error('WebSocket连接失败:', error);
     // 自动重连
     if (!reconnectTimer) {
-      reconnectTimer = setTimeout(connectWebSocket, RECONNECT_INTERVAL);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectWebSocket();
+      }, RECONNECT_INTERVAL);
     }
   }
 }
@@ -358,8 +374,9 @@ connectWebSocket();
 
 // 监听来自content script的消息（保持Service Worker活跃）
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === 'keepalive') {
+  if (message && message.action === 'keepalive') {
     sendResponse({ status: 'alive' });
+    return true;
   }
-  return true;
+  return false;
 });

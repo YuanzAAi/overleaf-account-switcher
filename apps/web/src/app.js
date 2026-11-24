@@ -172,6 +172,8 @@ function setupPageMotion() {
   let panel;
   let x = 0;
   let y = 0;
+  let clientX = 0;
+  let clientY = 0;
   const reset = () => {
     window.cancelAnimationFrame(frame);
     frame = 0;
@@ -185,13 +187,17 @@ function setupPageMotion() {
     const target = event.target.closest(".page-panel");
     if (!target) return;
     panel = target;
-    const bounds = content.getBoundingClientRect();
-    x = ((event.clientX - bounds.left) / bounds.width - 0.5) * 8;
-    y = ((event.clientY - bounds.top) / bounds.height - 0.5) * 6;
+    clientX = event.clientX;
+    clientY = event.clientY;
     if (frame) return;
     frame = window.requestAnimationFrame(() => {
-      panel.style.setProperty("--motif-x", `${x}px`);
-      panel.style.setProperty("--motif-y", `${y}px`);
+      const bounds = content.getBoundingClientRect();
+      if (bounds.width > 0 && bounds.height > 0) {
+        x = ((clientX - bounds.left) / bounds.width - 0.5) * 8;
+        y = ((clientY - bounds.top) / bounds.height - 0.5) * 6;
+        panel.style.setProperty("--motif-x", `${x}px`);
+        panel.style.setProperty("--motif-y", `${y}px`);
+      }
       frame = 0;
     });
   });

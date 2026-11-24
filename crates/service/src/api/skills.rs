@@ -236,29 +236,49 @@ fn run_installer(
         .map_err(|error| {
             format!("无法启动 Python，请确认已安装 Python 3.10 或以上版本：{error}")
         })?;
+    // 后台排空管道，防止子进程输出超过系统缓冲区时阻塞在 try_wait 循环。
+    let stdout_reader = child.stdout.take().map(|mut pipe| {
+        thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut pipe, &mut buffer);
+            buffer
+        })
+    });
+    let stderr_reader = child.stderr.take().map(|mut pipe| {
+        thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut pipe, &mut buffer);
+            buffer
+        })
+    });
     let started = Instant::now();
-    loop {
-        if child
-            .try_wait()
-            .map_err(|error| error.to_string())?
-            .is_some()
-        {
-            break;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
         }
         if started.elapsed() > Duration::from_secs(180)
             || browser_task_cancel_requested(shared, task_id)
         {
             let _ = child.kill();
             let _ = child.wait();
+            if let Some(handle) = stdout_reader {
+                let _ = handle.join();
+            }
+            if let Some(handle) = stderr_reader {
+                let _ = handle.join();
+            }
             return Err("skills 操作已取消或超时".into());
         }
         thread::sleep(Duration::from_millis(100));
+    };
+    if let Some(handle) = stdout_reader {
+        let _ = handle.join();
     }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    let stderr = stderr_reader
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default();
+    if !status.success() {
+        return Err(String::from_utf8_lossy(&stderr).trim().to_string());
     }
     Ok(match action {
         SkillAction::Install => "skills 已就绪",

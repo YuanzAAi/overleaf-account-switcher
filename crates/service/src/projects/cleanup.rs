@@ -503,8 +503,9 @@ async fn cleanup_then_remove_with_commit_lock(
             message: "account commit lock poisoned".to_string(),
         }
     })?;
-    let local_removal = crate::remove_accounts_locally_in_store(store, alias)
-        .map_err(|error| CleanupThenRemoveAccountError::LocalRemoval { error })?;
+    let local_removal =
+        crate::remove_accounts_locally_in_store_with_backend(store, alias, secret_backend)
+            .map_err(|error| CleanupThenRemoveAccountError::LocalRemoval { error })?;
     Ok(CleanupThenRemoveAccountReport {
         status: CleanupThenRemoveStatus::RemovedLocally,
         cleanup,

@@ -120,6 +120,10 @@ pub trait AccountSwitchCommandExecutor {
     async fn extension_client_count(&self) -> Option<usize> {
         None
     }
+
+    fn extension_client_count_sync(&self) -> Option<usize> {
+        None
+    }
 }
 
 pub fn plan_account_switch(

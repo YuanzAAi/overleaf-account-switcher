@@ -34,14 +34,18 @@ pub(super) fn desktop_write_text_file(path: String, text: String) -> Result<(), 
 }
 
 #[tauri::command]
-pub(super) fn desktop_write_binary_file(path: String, data: String) -> Result<(), String> {
+pub(super) async fn desktop_write_binary_file(path: String, data: String) -> Result<(), String> {
     if data.len() > 180 * 1024 * 1024 {
         return Err("file exceeds the download size limit".into());
     }
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data)
-        .map_err(|_| "invalid file data".to_string())?;
-    write_user_file(path, &bytes)
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|_| "invalid file data".to_string())?;
+        write_user_file(path, &bytes)
+    })
+    .await
+    .map_err(|error| format!("file write task failed: {error}"))?
 }
 
 fn write_user_file(path: String, bytes: &[u8]) -> Result<(), String> {
@@ -87,28 +91,34 @@ pub(super) fn desktop_focus_main_window(app: AppHandle) {
 }
 
 #[tauri::command]
-pub(super) fn desktop_open_chrome_extensions(profile_name: Option<String>) -> Result<(), String> {
-    let chrome_executable =
-        detect_chrome_executable().ok_or_else(|| "Chrome executable was not found".to_string())?;
-    let profile_name = normalize_chrome_profile_name(profile_name)?;
+pub(super) async fn desktop_open_chrome_extensions(
+    profile_name: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let chrome_executable = detect_chrome_executable()
+            .ok_or_else(|| "Chrome executable was not found".to_string())?;
+        let profile_name = normalize_chrome_profile_name(profile_name)?;
 
-    #[cfg(windows)]
-    {
-        open_chrome_extensions_windows(&chrome_executable, profile_name.as_deref())
-    }
-
-    #[cfg(not(windows))]
-    {
-        let mut command = Command::new(&chrome_executable);
-        if let Some(profile_name) = profile_name {
-            command.arg(format!("--profile-directory={profile_name}"));
+        #[cfg(windows)]
+        {
+            open_chrome_extensions_windows(&chrome_executable, profile_name.as_deref())
         }
-        command.arg("chrome://extensions/");
-        command
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| format!("failed to open Chrome extensions page: {error}"))
-    }
+
+        #[cfg(not(windows))]
+        {
+            let mut command = Command::new(&chrome_executable);
+            if let Some(profile_name) = profile_name {
+                command.arg(format!("--profile-directory={profile_name}"));
+            }
+            command.arg("chrome://extensions/");
+            command
+                .spawn()
+                .map(|_| ())
+                .map_err(|error| format!("failed to open Chrome extensions page: {error}"))
+        }
+    })
+    .await
+    .map_err(|error| format!("Chrome extensions task failed: {error}"))?
 }
 
 #[cfg(windows)]
