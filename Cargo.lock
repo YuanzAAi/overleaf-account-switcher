@@ -2551,7 +2551,7 @@ dependencies = [
 
 [[package]]
 name = "overleaf-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2565,7 +2565,7 @@ dependencies = [
 
 [[package]]
 name = "overleaf-browser"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -2581,11 +2581,11 @@ dependencies = [
 
 [[package]]
 name = "overleaf-core"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "overleaf-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -2605,7 +2605,7 @@ dependencies = [
 
 [[package]]
 name = "overleaf-service"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2625,7 +2625,7 @@ dependencies = [
 
 [[package]]
 name = "overleaf-storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "keyring",
  "overleaf-core",
@@ -2636,7 +2636,7 @@ dependencies = [
 
 [[package]]
 name = "overleaf-workflows"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "overleaf-core",
  "overleaf-storage",
