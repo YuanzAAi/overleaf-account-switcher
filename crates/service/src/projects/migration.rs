@@ -3,8 +3,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use overleaf_api::project_api::{
-    ProjectApiClient, ProjectApiError, ProjectApiStatusKind, ProjectApiTransport, ProjectTokenSet,
-    ReqwestProjectApiTransport,
+    ProjectApiClient, ProjectApiError, ProjectApiStatusKind, ProjectApiTransport,
+    ProjectApiTransportErrorKind, ProjectTokenSet, ReqwestProjectApiTransport,
 };
 use overleaf_api::session::{OverleafSessionClient, ReqwestSessionTransport};
 use overleaf_api::OVERLEAF_SESSION_COOKIE;
@@ -20,6 +20,7 @@ use serde::Serialize;
 use crate::account_secrets::{resolve_account_cookies, AccountSecretStoreError};
 
 const MIGRATION_MAX_RETRIES: u32 = 5;
+const TRANSIENT_STEP_MAX_RETRIES: u32 = 3;
 const JOIN_REQUEST_LIMIT: usize = 10;
 const JOIN_REQUEST_WINDOW: Duration = Duration::from_secs(60);
 
@@ -52,6 +53,8 @@ pub trait ProjectMigrationControl: Send + Sync {
     }
 
     fn on_progress(&self, _event: ProjectMigrationProgressEvent) {}
+
+    fn on_wait_countdown(&self, _current: u32, _total: u32, _message: String) {}
 }
 
 #[derive(Debug, Default)]
@@ -781,6 +784,16 @@ fn notify_migration_progress(
     });
 }
 
+fn notify_migration_wait_countdown(
+    control: &(dyn ProjectMigrationControl + Send + Sync),
+    current: u32,
+    total: u32,
+    message: impl Into<String>,
+) {
+    let total = total.max(1);
+    control.on_wait_countdown(current.min(total), total, message.into());
+}
+
 fn notify_project_result(
     control: &(dyn ProjectMigrationControl + Send + Sync),
     report: &ProjectMigrationReport,
@@ -897,10 +910,8 @@ where
             })
         }
         ProjectMigrationStrategy::LinkSharingCollaboration => {
-            let token = source_client
-                .get_project_tokens(&plan.project_id)
-                .await
-                .map_err(project_api_error_message)?;
+            let token =
+                get_project_tokens_with_retry(source_client, &plan.project_id, progress).await?;
             let (token, is_read_only) = select_token(token)?;
             let joined = join_project_with_retry(
                 target_client,
@@ -1016,24 +1027,100 @@ async fn enable_link_sharing_with_retry<T>(
 where
     T: ProjectApiTransport,
 {
-    let mut last_error = None;
-    for retry_index in 0..MIGRATION_MAX_RETRIES {
+    let mut rate_limit_retries = 0;
+    let mut transient_retries = 0;
+    loop {
         ensure_step_not_cancelled(progress.control)?;
         match client.enable_link_sharing(project_id).await {
             Ok(tokens) => return Ok(tokens),
             Err(error) if is_rate_limited(&error) => {
-                let seconds = rate_limit_delay(&error, retry_index);
-                last_error = Some(project_api_error_message(error));
+                let seconds = rate_limit_delay(&error, rate_limit_retries);
+                let error_message = project_api_error_message(error);
                 if let Ok(tokens) = client.get_project_tokens(project_id).await {
-                    return Ok(tokens);
+                    if tokens.read_only.is_some() || tokens.read_and_write.is_some() {
+                        return Ok(tokens);
+                    }
                 }
-                sleep_after_retry(progress, "启用链接共享", retry_index, seconds).await?;
+                if rate_limit_retries + 1 >= MIGRATION_MAX_RETRIES {
+                    ensure_step_not_cancelled(progress.control)?;
+                    return Err(error_message);
+                }
+                wait_after_rate_limit(progress, "启用链接共享", rate_limit_retries, seconds)
+                    .await?;
+                rate_limit_retries += 1;
+            }
+            Err(error) if is_transient_retryable_error(&error) => {
+                let error_message = project_api_error_message(error);
+                if let Ok(tokens) = client.get_project_tokens(project_id).await {
+                    if tokens.read_only.is_some() || tokens.read_and_write.is_some() {
+                        return Ok(tokens);
+                    }
+                }
+                if transient_retries >= TRANSIENT_STEP_MAX_RETRIES {
+                    ensure_step_not_cancelled(progress.control)?;
+                    return Err(error_message);
+                }
+                let seconds = transient_retry_delay(transient_retries);
+                transient_retries += 1;
+                wait_after_transient_error(
+                    progress,
+                    "启用链接共享",
+                    transient_retries,
+                    &error_message,
+                    seconds,
+                )
+                .await?;
             }
             Err(error) => return Err(project_api_error_message(error)),
         }
     }
+}
 
-    Err(last_error.unwrap_or_else(|| "rate limited while enabling link sharing".to_string()))
+async fn get_project_tokens_with_retry<T>(
+    client: &ProjectApiClient<T>,
+    project_id: &str,
+    progress: MigrationProgressContext<'_>,
+) -> Result<ProjectTokenSet, String>
+where
+    T: ProjectApiTransport,
+{
+    let mut rate_limit_retries = 0;
+    let mut transient_retries = 0;
+    loop {
+        ensure_step_not_cancelled(progress.control)?;
+        match client.get_project_tokens(project_id).await {
+            Ok(tokens) => return Ok(tokens),
+            Err(error) if is_rate_limited(&error) => {
+                let seconds = rate_limit_delay(&error, rate_limit_retries);
+                let error_message = project_api_error_message(error);
+                if rate_limit_retries + 1 >= MIGRATION_MAX_RETRIES {
+                    ensure_step_not_cancelled(progress.control)?;
+                    return Err(error_message);
+                }
+                wait_after_rate_limit(progress, "读取链接共享令牌", rate_limit_retries, seconds)
+                    .await?;
+                rate_limit_retries += 1;
+            }
+            Err(error) if is_transient_retryable_error(&error) => {
+                let error_message = project_api_error_message(error);
+                if transient_retries >= TRANSIENT_STEP_MAX_RETRIES {
+                    ensure_step_not_cancelled(progress.control)?;
+                    return Err(error_message);
+                }
+                let seconds = transient_retry_delay(transient_retries);
+                transient_retries += 1;
+                wait_after_transient_error(
+                    progress,
+                    "读取链接共享令牌",
+                    transient_retries,
+                    &error_message,
+                    seconds,
+                )
+                .await?;
+            }
+            Err(error) => return Err(project_api_error_message(error)),
+        }
+    }
 }
 
 async fn join_project_with_retry<T>(
@@ -1046,8 +1133,9 @@ async fn join_project_with_retry<T>(
 where
     T: ProjectApiTransport,
 {
-    let mut last_error = None;
-    for retry_index in 0..MIGRATION_MAX_RETRIES {
+    let mut rate_limit_retries = 0;
+    let mut transient_retries = 0;
+    loop {
         ensure_step_not_cancelled(progress.control)?;
         wait_before_project_join(progress, is_read_only).await?;
         let result = client.join_project_via_token(token, is_read_only).await;
@@ -1061,41 +1149,62 @@ where
                 return Ok(project_id.or_else(|| Some(expected_project_id.to_string())))
             }
             Err(error) if is_rate_limited(&error) => {
-                let seconds = rate_limit_delay(&error, retry_index);
-                last_error = Some(project_api_error_message(error));
+                let seconds = rate_limit_delay(&error, rate_limit_retries);
+                let error_message = project_api_error_message(error);
                 let target_projects = client.list_projects().await.unwrap_or_default();
                 match resolve_join_attempt(
                     expected_project_id,
                     ApiAttemptResult::RateLimited,
                     &target_projects,
-                    retry_index,
+                    rate_limit_retries,
                 ) {
                     JoinAttemptDecision::Joined => {
                         return Ok(Some(expected_project_id.to_string()));
                     }
                     JoinAttemptDecision::RetryAfterSeconds(_) => {
-                        sleep_after_retry(progress, "加入共享项目", retry_index, seconds).await?;
+                        if rate_limit_retries + 1 >= MIGRATION_MAX_RETRIES {
+                            ensure_step_not_cancelled(progress.control)?;
+                            return Err(error_message);
+                        }
+                        wait_after_rate_limit(progress, "加入共享项目", rate_limit_retries, seconds)
+                            .await?;
+                        rate_limit_retries += 1;
                     }
-                    JoinAttemptDecision::Failed => {
-                        return Err(last_error.unwrap_or_else(|| "join failed".to_string()));
-                    }
+                    JoinAttemptDecision::Failed => return Err(error_message),
+                }
+            }
+            Err(error) if is_transient_retryable_error(&error) => {
+                let error_message = project_api_error_message(error);
+                if active_project_id_exists(
+                    &client.list_projects().await.unwrap_or_default(),
+                    expected_project_id,
+                ) {
+                    return Ok(Some(expected_project_id.to_string()));
+                }
+                if transient_retries >= TRANSIENT_STEP_MAX_RETRIES {
+                    ensure_step_not_cancelled(progress.control)?;
+                    return Err(error_message);
+                }
+                let seconds = transient_retry_delay(transient_retries);
+                transient_retries += 1;
+                wait_after_transient_error(
+                    progress,
+                    "加入共享项目",
+                    transient_retries,
+                    &error_message,
+                    seconds,
+                )
+                .await?;
+                if active_project_id_exists(
+                    &client.list_projects().await.unwrap_or_default(),
+                    expected_project_id,
+                ) {
+                    return Ok(Some(expected_project_id.to_string()));
                 }
             }
             Err(error) => return Err(project_api_error_message(error)),
         }
     }
-
-    if client
-        .list_projects()
-        .await
-        .unwrap_or_default()
-        .iter()
-        .any(|project| !project.trashed && project.id == expected_project_id)
-    {
-        return Ok(Some(expected_project_id.to_string()));
-    }
-
-    Err(last_error.unwrap_or_else(|| "rate limited while joining project".to_string()))
 }
 
 fn join_request_delay(requests: &mut VecDeque<Instant>, now: Instant) -> Option<Duration> {
@@ -1122,20 +1231,99 @@ async fn wait_before_project_join(
         join_request_delay(&mut requests[usize::from(is_read_only)], Instant::now())
     };
     if let Some(delay) = delay {
-        notify_migration_progress(
-            progress.control,
-            progress.current,
-            progress.total,
-            ProjectMigrationProgressLevel::Info,
-            format!(
-                "项目 {} 的共享加入请求已达速率上限，等待 {:.0} 秒后继续",
-                progress.project_name,
-                delay.as_secs_f64().ceil()
-            ),
-        );
-        wait_with_cancellation(progress.control, delay).await?;
+        let initial_secs = ceil_seconds(delay);
+        if initial_secs > 0 {
+            notify_migration_progress(
+                progress.control,
+                progress.current,
+                progress.total,
+                ProjectMigrationProgressLevel::Info,
+                format!(
+                    "项目 {} 的共享加入请求已达速率上限，等待 {} 秒后继续",
+                    progress.project_name, initial_secs
+                ),
+            );
+            wait_with_cancellation_countdown(
+                progress.control,
+                progress.current,
+                progress.total,
+                delay,
+                |remaining_secs| {
+                    format!(
+                        "项目 {} 的共享加入请求已达速率上限，等待 {} 秒后继续",
+                        progress.project_name, remaining_secs
+                    )
+                },
+            )
+            .await?;
+        }
     }
     Ok(())
+}
+
+enum CloneRecoveryState {
+    AlreadyCloned(String),
+    ConfirmedAbsent,
+}
+
+async fn confirm_clone_state_before_retry<T>(
+    client: &ProjectApiClient<T>,
+    project_name: &str,
+    exclude_project_id: Option<&str>,
+    progress: MigrationProgressContext<'_>,
+    clone_error: &str,
+    rate_limit_retries: &mut u32,
+    transient_retries: &mut u32,
+) -> Result<CloneRecoveryState, String>
+where
+    T: ProjectApiTransport,
+{
+    // 克隆是非幂等写操作：再次发起 POST /clone 前必须拿到一次成功的项目清单确认副本不存在。
+    loop {
+        ensure_step_not_cancelled(progress.control)?;
+        match client.list_projects().await {
+            Ok(projects) => {
+                if let Some(existing_id) =
+                    owned_project_id_by_name(&projects, project_name, exclude_project_id)
+                {
+                    return Ok(CloneRecoveryState::AlreadyCloned(existing_id));
+                }
+                return Ok(CloneRecoveryState::ConfirmedAbsent);
+            }
+            Err(error) if is_rate_limited(&error) => {
+                let seconds = rate_limit_delay(&error, *rate_limit_retries);
+                let probe_error = project_api_error_message(error);
+                if *rate_limit_retries + 1 >= MIGRATION_MAX_RETRIES {
+                    ensure_step_not_cancelled(progress.control)?;
+                    return Err(format!("{clone_error}（核对克隆结果失败: {probe_error}）"));
+                }
+                wait_after_rate_limit(progress, "核对克隆结果", *rate_limit_retries, seconds)
+                    .await?;
+                *rate_limit_retries += 1;
+            }
+            Err(error) if is_transient_retryable_error(&error) => {
+                let probe_error = project_api_error_message(error);
+                if *transient_retries >= TRANSIENT_STEP_MAX_RETRIES {
+                    ensure_step_not_cancelled(progress.control)?;
+                    return Err(format!("{clone_error}（核对克隆结果失败: {probe_error}）"));
+                }
+                let seconds = transient_retry_delay(*transient_retries);
+                *transient_retries += 1;
+                wait_after_transient_error(
+                    progress,
+                    "核对克隆结果",
+                    *transient_retries,
+                    &probe_error,
+                    seconds,
+                )
+                .await?;
+            }
+            Err(error) => {
+                let probe_error = project_api_error_message(error);
+                return Err(format!("{clone_error}（核对克隆结果失败: {probe_error}）"));
+            }
+        }
+    }
 }
 
 async fn clone_project_with_retry<T>(
@@ -1148,28 +1336,85 @@ async fn clone_project_with_retry<T>(
 where
     T: ProjectApiTransport,
 {
-    let mut last_error = None;
-    for retry_index in 0..MIGRATION_MAX_RETRIES {
+    let mut rate_limit_retries = 0;
+    let mut transient_retries = 0;
+    loop {
         ensure_step_not_cancelled(progress.control)?;
         match client.clone_project(project_id, Some(project_name)).await {
             Ok(cloned_id) => return Ok(cloned_id),
             Err(error) if is_rate_limited(&error) => {
-                let seconds = rate_limit_delay(&error, retry_index);
-                last_error = Some(project_api_error_message(error));
-                if let Some(existing_id) = owned_project_id_by_name(
-                    &client.list_projects().await.unwrap_or_default(),
-                    project_name,
-                    exclude_project_id,
-                ) {
+                let seconds = rate_limit_delay(&error, rate_limit_retries);
+                let error_message = project_api_error_message(error);
+                if let Ok(projects) = client.list_projects().await {
+                    if let Some(existing_id) =
+                        owned_project_id_by_name(&projects, project_name, exclude_project_id)
+                    {
+                        return Ok(existing_id);
+                    }
+                }
+                if rate_limit_retries + 1 >= MIGRATION_MAX_RETRIES {
+                    ensure_step_not_cancelled(progress.control)?;
+                    return Err(error_message);
+                }
+                wait_after_rate_limit(progress, "克隆项目", rate_limit_retries, seconds).await?;
+                rate_limit_retries += 1;
+                if let CloneRecoveryState::AlreadyCloned(existing_id) =
+                    confirm_clone_state_before_retry(
+                        client,
+                        project_name,
+                        exclude_project_id,
+                        progress,
+                        &error_message,
+                        &mut rate_limit_retries,
+                        &mut transient_retries,
+                    )
+                    .await?
+                {
                     return Ok(existing_id);
                 }
-                sleep_after_retry(progress, "克隆项目", retry_index, seconds).await?;
+            }
+            Err(error) if is_transient_retryable_error(&error) => {
+                let error_message = project_api_error_message(error);
+                // 克隆接口返回 5xx/超时时，服务端可能已落库；先快速核对清单，避免无意义等待或重复创建副本。
+                if let Ok(projects) = client.list_projects().await {
+                    if let Some(existing_id) =
+                        owned_project_id_by_name(&projects, project_name, exclude_project_id)
+                    {
+                        return Ok(existing_id);
+                    }
+                }
+                if transient_retries >= TRANSIENT_STEP_MAX_RETRIES {
+                    ensure_step_not_cancelled(progress.control)?;
+                    return Err(error_message);
+                }
+                let seconds = transient_retry_delay(transient_retries);
+                transient_retries += 1;
+                wait_after_transient_error(
+                    progress,
+                    "克隆项目",
+                    transient_retries,
+                    &error_message,
+                    seconds,
+                )
+                .await?;
+                if let CloneRecoveryState::AlreadyCloned(existing_id) =
+                    confirm_clone_state_before_retry(
+                        client,
+                        project_name,
+                        exclude_project_id,
+                        progress,
+                        &error_message,
+                        &mut rate_limit_retries,
+                        &mut transient_retries,
+                    )
+                    .await?
+                {
+                    return Ok(existing_id);
+                }
             }
             Err(error) => return Err(project_api_error_message(error)),
         }
     }
-
-    Err(last_error.unwrap_or_else(|| "rate limited while cloning project".to_string()))
 }
 
 async fn invite_collaborator_with_retry<T>(
@@ -1182,8 +1427,9 @@ async fn invite_collaborator_with_retry<T>(
 where
     T: ProjectApiTransport,
 {
-    let mut last_error = None;
-    for retry_index in 0..MIGRATION_MAX_RETRIES {
+    let mut rate_limit_retries = 0;
+    let mut transient_retries = 0;
+    loop {
         ensure_step_not_cancelled(progress.control)?;
         match client
             .invite_collaborator(project_id, email, privileges)
@@ -1191,27 +1437,36 @@ where
         {
             Ok(()) => return Ok(()),
             Err(error) if is_rate_limited(&error) => {
-                let seconds = rate_limit_delay(&error, retry_index);
-                last_error = Some(project_api_error_message(error));
-                sleep_after_retry(progress, "恢复项目协作者", retry_index, seconds).await?;
+                let seconds = rate_limit_delay(&error, rate_limit_retries);
+                let error_message = project_api_error_message(error);
+                if rate_limit_retries + 1 >= MIGRATION_MAX_RETRIES {
+                    ensure_step_not_cancelled(progress.control)?;
+                    return Err(error_message);
+                }
+                wait_after_rate_limit(progress, "恢复项目协作者", rate_limit_retries, seconds)
+                    .await?;
+                rate_limit_retries += 1;
+            }
+            Err(error) if is_transient_retryable_error(&error) => {
+                let error_message = project_api_error_message(error);
+                if transient_retries >= TRANSIENT_STEP_MAX_RETRIES {
+                    ensure_step_not_cancelled(progress.control)?;
+                    return Err(error_message);
+                }
+                let seconds = transient_retry_delay(transient_retries);
+                transient_retries += 1;
+                wait_after_transient_error(
+                    progress,
+                    "恢复项目协作者",
+                    transient_retries,
+                    &error_message,
+                    seconds,
+                )
+                .await?;
             }
             Err(error) => return Err(project_api_error_message(error)),
         }
     }
-
-    Err(last_error.unwrap_or_else(|| "rate limited while inviting collaborator".to_string()))
-}
-
-async fn sleep_after_retry(
-    progress: MigrationProgressContext<'_>,
-    operation: &str,
-    retry_index: u32,
-    seconds: u64,
-) -> Result<(), String> {
-    if retry_index + 1 >= MIGRATION_MAX_RETRIES {
-        return ensure_step_not_cancelled(progress.control);
-    }
-    wait_after_rate_limit(progress, operation, retry_index, seconds).await
 }
 
 fn rate_limit_delay(error: &ProjectApiError, retry_index: u32) -> u64 {
@@ -1223,10 +1478,192 @@ fn rate_limit_delay(error: &ProjectApiError, retry_index: u32) -> u64 {
     overleaf_workflows::rate_limit_wait_seconds(retry_index)
 }
 
+fn transient_retry_delay(retry_index: u32) -> u64 {
+    // 短间隔原位退避（2s -> 4s -> 6s），在不明显拖慢批次的前提下吸收临时 5xx/网络抖动。
+    2 * (u64::from(retry_index) + 1)
+}
+
+fn ceil_seconds(duration: Duration) -> u64 {
+    duration
+        .as_secs()
+        .saturating_add(u64::from(duration.subsec_nanos() > 0))
+}
+
 #[cfg(test)]
 mod retry_after_tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use overleaf_api::project_api::{
+        ProjectApiHttpError, ProjectApiHttpResponse, ProjectApiRequest, ProjectApiTransportError,
+    };
+    use serde_json::json;
+
     use super::*;
-    use overleaf_api::project_api::ProjectApiHttpError;
+
+    struct MockProjectTransport {
+        projects: Mutex<Vec<serde_json::Value>>,
+        clone_calls: Arc<Mutex<Vec<String>>>,
+        clone_failures: Mutex<Vec<(String, u16, bool)>>,
+        enable_failures: Mutex<Vec<(String, u16)>>,
+        list_failures_after_clone: Mutex<VecDeque<u16>>,
+    }
+
+    impl MockProjectTransport {
+        fn new(projects: Vec<serde_json::Value>) -> Self {
+            Self {
+                projects: Mutex::new(projects),
+                clone_calls: Arc::new(Mutex::new(Vec::new())),
+                clone_failures: Mutex::new(Vec::new()),
+                enable_failures: Mutex::new(Vec::new()),
+                list_failures_after_clone: Mutex::new(VecDeque::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ProjectApiTransport for MockProjectTransport {
+        async fn send(
+            &self,
+            request: &ProjectApiRequest,
+        ) -> Result<ProjectApiHttpResponse, ProjectApiTransportError> {
+            if request.path == "/project" {
+                if !self.clone_calls.lock().unwrap().is_empty() {
+                    if let Some(status) = self.list_failures_after_clone.lock().unwrap().pop_front()
+                    {
+                        return Ok(ProjectApiHttpResponse::new(status, "list failed"));
+                    }
+                }
+                let projects = self.projects.lock().unwrap().clone();
+                return Ok(ProjectApiHttpResponse::new(
+                    200,
+                    json!({ "projects": projects }).to_string(),
+                ));
+            }
+            if let Some(rest) = request.path.strip_prefix("/project/") {
+                if let Some(project_id) = rest.strip_suffix("/settings/admin") {
+                    let mut failures = self.enable_failures.lock().unwrap();
+                    if let Some(pos) = failures.iter().position(|(id, _)| id == project_id) {
+                        let (_, status) = failures.remove(pos);
+                        return Ok(ProjectApiHttpResponse::new(status, "error"));
+                    }
+                    return Ok(ProjectApiHttpResponse::new(200, "{}"));
+                }
+                if let Some(project_id) = rest.strip_suffix("/tokens") {
+                    return Ok(ProjectApiHttpResponse::new(
+                        200,
+                        json!({ "readOnly": format!("ro-{project_id}") }).to_string(),
+                    ));
+                }
+                if let Some(project_id) = rest.strip_suffix("/clone") {
+                    self.clone_calls
+                        .lock()
+                        .unwrap()
+                        .push(project_id.to_string());
+                    let name = request
+                        .json_body
+                        .as_ref()
+                        .and_then(|body| body.get("projectName"))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("cloned")
+                        .to_string();
+                    let cloned_id = format!("cloned-{project_id}");
+                    let mut failures = self.clone_failures.lock().unwrap();
+                    if let Some(pos) = failures.iter().position(|(id, _, _)| id == project_id) {
+                        let (_, status, commit_before_error) = failures.remove(pos);
+                        if commit_before_error {
+                            self.projects.lock().unwrap().push(json!({
+                                "id": cloned_id,
+                                "name": name,
+                                "accessLevel": "owner",
+                                "trashed": false
+                            }));
+                        }
+                        return Ok(ProjectApiHttpResponse::new(status, "server error"));
+                    }
+                    self.projects.lock().unwrap().push(json!({
+                        "id": cloned_id,
+                        "name": name,
+                        "accessLevel": "owner",
+                        "trashed": false
+                    }));
+                    return Ok(ProjectApiHttpResponse::new(
+                        200,
+                        json!({ "project_id": cloned_id }).to_string(),
+                    ));
+                }
+                if let Some(project_id) = rest.strip_suffix("/leave") {
+                    self.projects
+                        .lock()
+                        .unwrap()
+                        .retain(|project| project.get("id").and_then(|v| v.as_str()) != Some(project_id));
+                    return Ok(ProjectApiHttpResponse::new(200, "{}"));
+                }
+            }
+            if let Some(token) = request
+                .path
+                .strip_prefix("/read/")
+                .and_then(|rest| rest.strip_suffix("/grant"))
+            {
+                let project_id = token.strip_prefix("ro-").unwrap_or(token).to_string();
+                let mut projects = self.projects.lock().unwrap();
+                if !projects
+                    .iter()
+                    .any(|project| project.get("id").and_then(|v| v.as_str()) == Some(&project_id))
+                {
+                    projects.push(json!({
+                        "id": project_id,
+                        "name": format!("shared-{project_id}"),
+                        "accessLevel": "readOnly",
+                        "trashed": false
+                    }));
+                }
+                return Ok(ProjectApiHttpResponse::new(
+                    200,
+                    json!({ "projectId": project_id }).to_string(),
+                ));
+            }
+            if let Some(token) = request.path.strip_prefix("/read/") {
+                let project_id = token.strip_prefix("ro-").unwrap_or(token);
+                return Ok(ProjectApiHttpResponse::new(
+                    200,
+                    format!(
+                        r#"<meta name="ol-project" content='{{"_id":"{project_id}"}}'>"#,
+                    ),
+                ));
+            }
+            Ok(ProjectApiHttpResponse::new(404, "not found"))
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingMigrationControl {
+        cancelled: AtomicBool,
+        progress_messages: Mutex<Vec<String>>,
+        countdown_messages: Mutex<Vec<String>>,
+    }
+
+    impl ProjectMigrationControl for RecordingMigrationControl {
+        fn is_cancel_requested(&self) -> bool {
+            self.cancelled.load(Ordering::SeqCst)
+        }
+
+        fn on_progress(&self, event: ProjectMigrationProgressEvent) {
+            self.progress_messages.lock().unwrap().push(event.message);
+        }
+
+        fn on_wait_countdown(&self, _current: u32, _total: u32, message: String) {
+            self.countdown_messages.lock().unwrap().push(message);
+        }
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("build tokio runtime")
+    }
 
     #[test]
     fn join_request_window_preserves_initial_burst_and_releases_expired_slots() {
@@ -1269,6 +1706,196 @@ mod retry_after_tests {
             assert_eq!(rate_limit_delay(&error, 1), expected);
         }
     }
+
+    #[test]
+    fn transient_500_retries_in_place_and_preserves_project_order() {
+        let source = ProjectApiClient::new(MockProjectTransport::new(vec![
+            json!({"id": "p1", "name": "Oldest", "accessLevel": "owner", "trashed": false, "lastUpdated": "2024-01-01T00:00:00Z"}),
+            json!({"id": "p2", "name": "Middle", "accessLevel": "owner", "trashed": false, "lastUpdated": "2024-01-02T00:00:00Z"}),
+            json!({"id": "p3", "name": "Newest", "accessLevel": "owner", "trashed": false, "lastUpdated": "2024-01-03T00:00:00Z"}),
+        ]));
+        let target_transport = MockProjectTransport::new(Vec::new());
+        let clone_calls = Arc::clone(&target_transport.clone_calls);
+        target_transport
+            .clone_failures
+            .lock()
+            .unwrap()
+            .push(("p2".to_string(), 500, false));
+        let target = ProjectApiClient::new(target_transport);
+        let control = RecordingMigrationControl::default();
+
+        let report = runtime()
+            .block_on(migrate_projects_between_clients_controlled(
+                "src", "dst", &source, &target, &control,
+            ))
+            .expect("migration should recover in place");
+
+        assert_eq!(report.migrated_count, 3);
+        assert_eq!(report.failed_count, 0);
+        assert_eq!(report.remigration_attempted_count, 0);
+        assert_eq!(*clone_calls.lock().unwrap(), vec!["p1", "p2", "p2", "p3"]);
+        let countdowns = control.countdown_messages.lock().unwrap();
+        assert!(
+            countdowns
+                .iter()
+                .any(|msg| msg.contains("Middle") && msg.contains("1 秒后原位重试")),
+            "expected live countdown tick during 2s in-place retry, got: {countdowns:?}"
+        );
+    }
+
+    #[test]
+    fn transient_500_after_clone_committed_reuses_existing_clone_without_duplicate() {
+        let source = ProjectApiClient::new(MockProjectTransport::new(vec![
+            json!({"id": "p1", "name": "Report", "accessLevel": "owner", "trashed": false, "lastUpdated": "2024-01-01T00:00:00Z"}),
+        ]));
+        let target_transport = MockProjectTransport::new(Vec::new());
+        let clone_calls = Arc::clone(&target_transport.clone_calls);
+        target_transport
+            .clone_failures
+            .lock()
+            .unwrap()
+            .push(("p1".to_string(), 500, true));
+        let target = ProjectApiClient::new(target_transport);
+        let control = RecordingMigrationControl::default();
+
+        let report = runtime()
+            .block_on(migrate_projects_between_clients_controlled(
+                "src", "dst", &source, &target, &control,
+            ))
+            .expect("idempotent clone recovery should succeed without retry sleep");
+
+        assert_eq!(report.migrated_count, 1);
+        assert_eq!(report.failed_count, 0);
+        assert_eq!(report.remigration_attempted_count, 0);
+        assert_eq!(*clone_calls.lock().unwrap(), vec!["p1"]);
+    }
+
+    #[test]
+    fn client_4xx_skips_in_place_transient_retry_and_uses_audit_fallback() {
+        let source_transport = MockProjectTransport::new(vec![
+            json!({"id": "p1", "name": "First", "accessLevel": "owner", "trashed": false, "lastUpdated": "2024-01-01T00:00:00Z"}),
+            json!({"id": "p2", "name": "Second", "accessLevel": "owner", "trashed": false, "lastUpdated": "2024-01-02T00:00:00Z"}),
+        ]);
+        source_transport
+            .enable_failures
+            .lock()
+            .unwrap()
+            .push(("p1".to_string(), 403));
+        let source = ProjectApiClient::new(source_transport);
+        let target_transport = MockProjectTransport::new(Vec::new());
+        let clone_calls = Arc::clone(&target_transport.clone_calls);
+        let target = ProjectApiClient::new(target_transport);
+        let control = RecordingMigrationControl::default();
+
+        let report = runtime()
+            .block_on(migrate_projects_between_clients_controlled(
+                "src", "dst", &source, &target, &control,
+            ))
+            .expect("final audit should act as last-resort recovery");
+
+        assert_eq!(report.migrated_count, 2);
+        assert_eq!(report.failed_count, 0);
+        assert_eq!(report.remigration_attempted_count, 1);
+        assert_eq!(*clone_calls.lock().unwrap(), vec!["p2", "p1"]);
+        assert!(control.countdown_messages.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn wait_countdown_ticks_strictly_downward_and_respects_cancellation() {
+        let control = RecordingMigrationControl::default();
+        runtime()
+            .block_on(wait_with_cancellation_countdown(
+                &control,
+                1,
+                3,
+                Duration::from_millis(2_150),
+                |remaining| format!("等待 {remaining} 秒后继续"),
+            ))
+            .expect("countdown wait completes");
+        assert_eq!(
+            *control.countdown_messages.lock().unwrap(),
+            vec!["等待 2 秒后继续", "等待 1 秒后继续"]
+        );
+
+        let cancelled = RecordingMigrationControl::default();
+        cancelled.cancelled.store(true, Ordering::SeqCst);
+        let err = runtime()
+            .block_on(wait_with_cancellation_countdown(
+                &cancelled,
+                1,
+                3,
+                Duration::from_secs(30),
+                |remaining| format!("等待 {remaining} 秒后继续"),
+            ))
+            .expect_err("cancelled wait should abort immediately");
+        assert_eq!(err, "project migration cancelled");
+    }
+
+    #[test]
+    fn transient_500_with_failing_recovery_list_recovers_without_duplicate_clone() {
+        let source = ProjectApiClient::new(MockProjectTransport::new(vec![
+            json!({"id": "p1", "name": "Report", "accessLevel": "owner", "trashed": false, "lastUpdated": "2024-01-01T00:00:00Z"}),
+        ]));
+        let target_transport = MockProjectTransport::new(Vec::new());
+        let clone_calls = Arc::clone(&target_transport.clone_calls);
+        target_transport
+            .clone_failures
+            .lock()
+            .unwrap()
+            .push(("p1".to_string(), 500, true));
+        // 克隆已落库但紧接着两次恢复清单都返回 500；必须继续只重试读取清单，绝不能盲目二次 clone。
+        target_transport
+            .list_failures_after_clone
+            .lock()
+            .unwrap()
+            .extend([500, 500]);
+        let target = ProjectApiClient::new(target_transport);
+        let control = RecordingMigrationControl::default();
+
+        let report = runtime()
+            .block_on(migrate_projects_between_clients_controlled(
+                "src", "dst", &source, &target, &control,
+            ))
+            .expect("recovery list retry should detect committed clone without duplicate POST");
+
+        assert_eq!(report.migrated_count, 1);
+        assert_eq!(report.failed_count, 0);
+        assert_eq!(report.remigration_attempted_count, 0);
+        assert_eq!(*clone_calls.lock().unwrap(), vec!["p1"]);
+    }
+
+    #[test]
+    fn transient_500_with_inconclusive_recovery_list_never_reclones() {
+        let source = ProjectApiClient::new(MockProjectTransport::new(vec![
+            json!({"id": "p1", "name": "Report", "accessLevel": "owner", "trashed": false, "lastUpdated": "2024-01-01T00:00:00Z"}),
+        ]));
+        let target_transport = MockProjectTransport::new(Vec::new());
+        let clone_calls = Arc::clone(&target_transport.clone_calls);
+        target_transport
+            .clone_failures
+            .lock()
+            .unwrap()
+            .push(("p1".to_string(), 500, true));
+        // 预检 500、退避后核对 403（不可重试），必须中止二次 clone，交由最终审计仅离开原分享项目。
+        target_transport
+            .list_failures_after_clone
+            .lock()
+            .unwrap()
+            .extend([500, 403]);
+        let target = ProjectApiClient::new(target_transport);
+        let control = RecordingMigrationControl::default();
+
+        let report = runtime()
+            .block_on(migrate_projects_between_clients_controlled(
+                "src", "dst", &source, &target, &control,
+            ))
+            .expect("final audit should finish leave_project without duplicating clone");
+
+        assert_eq!(report.migrated_count, 1);
+        assert_eq!(report.failed_count, 0);
+        assert_eq!(report.remigration_attempted_count, 1);
+        assert_eq!(*clone_calls.lock().unwrap(), vec!["p1"]);
+    }
 }
 
 async fn wait_after_rate_limit(
@@ -1277,6 +1904,7 @@ async fn wait_after_rate_limit(
     retry_index: u32,
     seconds: u64,
 ) -> Result<(), String> {
+    let attempt = retry_index + 1;
     notify_migration_progress(
         progress.control,
         progress.current,
@@ -1284,27 +1912,91 @@ async fn wait_after_rate_limit(
         ProjectMigrationProgressLevel::Warning,
         format!(
             "项目 {} 的{}触发 API 限流，{} 秒后重试（第 {}/{} 次）",
-            progress.project_name,
-            operation,
-            seconds,
-            retry_index + 1,
-            MIGRATION_MAX_RETRIES
+            progress.project_name, operation, seconds, attempt, MIGRATION_MAX_RETRIES
         ),
     );
-    wait_with_cancellation(progress.control, Duration::from_secs(seconds)).await
+    wait_with_cancellation_countdown(
+        progress.control,
+        progress.current,
+        progress.total,
+        Duration::from_secs(seconds),
+        |remaining_secs| {
+            format!(
+                "项目 {} 的{}触发 API 限流，{} 秒后重试（第 {}/{} 次）",
+                progress.project_name, operation, remaining_secs, attempt, MIGRATION_MAX_RETRIES
+            )
+        },
+    )
+    .await
 }
 
-async fn wait_with_cancellation(
-    control: &(dyn ProjectMigrationControl + Send + Sync),
-    duration: Duration,
+async fn wait_after_transient_error(
+    progress: MigrationProgressContext<'_>,
+    operation: &str,
+    retry_attempt: u32,
+    error_message: &str,
+    seconds: u64,
 ) -> Result<(), String> {
-    let mut remaining = duration;
+    notify_migration_progress(
+        progress.control,
+        progress.current,
+        progress.total,
+        ProjectMigrationProgressLevel::Warning,
+        format!(
+            "项目 {} 的{}遇到临时错误（{}），{} 秒后原位重试（第 {}/{} 次）",
+            progress.project_name,
+            operation,
+            error_message,
+            seconds,
+            retry_attempt,
+            TRANSIENT_STEP_MAX_RETRIES
+        ),
+    );
+    wait_with_cancellation_countdown(
+        progress.control,
+        progress.current,
+        progress.total,
+        Duration::from_secs(seconds),
+        |remaining_secs| {
+            format!(
+                "项目 {} 的{}遇到临时错误（{}），{} 秒后原位重试（第 {}/{} 次）",
+                progress.project_name,
+                operation,
+                error_message,
+                remaining_secs,
+                retry_attempt,
+                TRANSIENT_STEP_MAX_RETRIES
+            )
+        },
+    )
+    .await
+}
+
+async fn wait_with_cancellation_countdown<F>(
+    control: &(dyn ProjectMigrationControl + Send + Sync),
+    current: u32,
+    total: u32,
+    duration: Duration,
+    mut format_message: F,
+) -> Result<(), String>
+where
+    F: FnMut(u64) -> String,
+{
+    let deadline = Instant::now() + duration;
+    let mut last_reported_secs = ceil_seconds(duration);
     let interval = Duration::from_millis(250);
-    while !remaining.is_zero() {
+    loop {
         ensure_step_not_cancelled(control)?;
-        let slice = remaining.min(interval);
-        tokio::time::sleep(slice).await;
-        remaining = remaining.saturating_sub(slice);
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let remaining_secs = ceil_seconds(remaining);
+        if remaining_secs > 0 && remaining_secs < last_reported_secs {
+            last_reported_secs = remaining_secs;
+            notify_migration_wait_countdown(control, current, total, format_message(remaining_secs));
+        }
+        tokio::time::sleep(remaining.min(interval)).await;
     }
     ensure_step_not_cancelled(control)
 }
@@ -1327,16 +2019,40 @@ async fn leave_project_with_retry<T>(
 where
     T: ProjectApiTransport,
 {
-    let mut last_error = None;
-    for retry_index in 0..MIGRATION_MAX_RETRIES {
+    let mut rate_limit_retries = 0;
+    let mut transient_retries = 0;
+    loop {
         ensure_step_not_cancelled(progress.control)?;
         match client.leave_project(project_id).await {
             Ok(()) => return Ok(()),
             Err(error) if is_not_found(&error) => return Ok(()),
             Err(error) if is_rate_limited(&error) => {
-                let seconds = rate_limit_delay(&error, retry_index);
-                last_error = Some(project_api_error_message(error));
-                sleep_after_retry(progress, "离开原分享项目", retry_index, seconds).await?;
+                let seconds = rate_limit_delay(&error, rate_limit_retries);
+                let error_message = project_api_error_message(error);
+                if rate_limit_retries + 1 >= MIGRATION_MAX_RETRIES {
+                    ensure_step_not_cancelled(progress.control)?;
+                    return Err(format!("离开原分享项目失败: {error_message}"));
+                }
+                wait_after_rate_limit(progress, "离开原分享项目", rate_limit_retries, seconds)
+                    .await?;
+                rate_limit_retries += 1;
+            }
+            Err(error) if is_transient_retryable_error(&error) => {
+                let error_message = project_api_error_message(error);
+                if transient_retries >= TRANSIENT_STEP_MAX_RETRIES {
+                    ensure_step_not_cancelled(progress.control)?;
+                    return Err(format!("离开原分享项目失败: {error_message}"));
+                }
+                let seconds = transient_retry_delay(transient_retries);
+                transient_retries += 1;
+                wait_after_transient_error(
+                    progress,
+                    "离开原分享项目",
+                    transient_retries,
+                    &error_message,
+                    seconds,
+                )
+                .await?;
             }
             Err(error) => {
                 return Err(format!(
@@ -1346,11 +2062,6 @@ where
             }
         }
     }
-
-    Err(format!(
-        "离开原分享项目失败: {}",
-        last_error.unwrap_or_else(|| format!("failed to leave project {project_id}"))
-    ))
 }
 
 fn owned_project_id_by_name(
@@ -1377,6 +2088,18 @@ fn is_rate_limited(error: &ProjectApiError) -> bool {
     )
 }
 
+fn is_transient_retryable_error(error: &ProjectApiError) -> bool {
+    matches!(
+        error,
+        ProjectApiError::Http(http_error)
+            if http_error.kind == ProjectApiStatusKind::ServerError
+    ) || matches!(
+        error,
+        ProjectApiError::Transport(transport_error)
+            if transport_error.kind == ProjectApiTransportErrorKind::RequestFailed
+    )
+}
+
 fn is_not_found(error: &ProjectApiError) -> bool {
     matches!(
         error,
@@ -1395,30 +2118,80 @@ async fn list_projects_with_retry<T>(
 where
     T: ProjectApiTransport,
 {
-    let mut last_error = None;
-    for retry_index in 0..MIGRATION_MAX_RETRIES {
+    let mut rate_limit_retries = 0;
+    let mut transient_retries = 0;
+    loop {
         ensure_migration_not_cancelled(control)?;
         match client.list_projects().await {
             Ok(projects) => return Ok(projects),
             Err(error) if is_rate_limited(&error) => {
-                let seconds = rate_limit_delay(&error, retry_index);
-                last_error = Some(project_api_error_message(error));
-                if retry_index + 1 < MIGRATION_MAX_RETRIES {
-                    notify_migration_progress(
-                        control,
-                        current,
-                        total,
-                        ProjectMigrationProgressLevel::Warning,
-                        format!(
-                            "账号 {alias} 的项目清单触发 API 限流，{seconds} 秒后重试（第 {}/{} 次）",
-                            retry_index + 1,
-                            MIGRATION_MAX_RETRIES
-                        ),
-                    );
-                    wait_with_cancellation(control, Duration::from_secs(seconds))
-                        .await
-                        .map_err(|_| ProjectMigrationError::Cancelled)?;
+                let seconds = rate_limit_delay(&error, rate_limit_retries);
+                let error_message = project_api_error_message(error);
+                if rate_limit_retries + 1 >= MIGRATION_MAX_RETRIES {
+                    ensure_migration_not_cancelled(control)?;
+                    return Err(ProjectMigrationError::ProjectListFailed {
+                        alias: alias.to_string(),
+                        message: error_message,
+                    });
                 }
+                let attempt = rate_limit_retries + 1;
+                notify_migration_progress(
+                    control,
+                    current,
+                    total,
+                    ProjectMigrationProgressLevel::Warning,
+                    format!(
+                        "账号 {alias} 的项目清单触发 API 限流，{seconds} 秒后重试（第 {attempt}/{MIGRATION_MAX_RETRIES} 次）"
+                    ),
+                );
+                wait_with_cancellation_countdown(
+                    control,
+                    current,
+                    total,
+                    Duration::from_secs(seconds),
+                    |remaining_secs| {
+                        format!(
+                            "账号 {alias} 的项目清单触发 API 限流，{remaining_secs} 秒后重试（第 {attempt}/{MIGRATION_MAX_RETRIES} 次）"
+                        )
+                    },
+                )
+                .await
+                .map_err(|_| ProjectMigrationError::Cancelled)?;
+                rate_limit_retries += 1;
+            }
+            Err(error) if is_transient_retryable_error(&error) => {
+                let error_message = project_api_error_message(error);
+                if transient_retries >= TRANSIENT_STEP_MAX_RETRIES {
+                    ensure_migration_not_cancelled(control)?;
+                    return Err(ProjectMigrationError::ProjectListFailed {
+                        alias: alias.to_string(),
+                        message: error_message,
+                    });
+                }
+                let seconds = transient_retry_delay(transient_retries);
+                transient_retries += 1;
+                notify_migration_progress(
+                    control,
+                    current,
+                    total,
+                    ProjectMigrationProgressLevel::Warning,
+                    format!(
+                        "账号 {alias} 的项目清单遇到临时错误（{error_message}），{seconds} 秒后原位重试（第 {transient_retries}/{TRANSIENT_STEP_MAX_RETRIES} 次）"
+                    ),
+                );
+                wait_with_cancellation_countdown(
+                    control,
+                    current,
+                    total,
+                    Duration::from_secs(seconds),
+                    |remaining_secs| {
+                        format!(
+                            "账号 {alias} 的项目清单遇到临时错误（{error_message}），{remaining_secs} 秒后原位重试（第 {transient_retries}/{TRANSIENT_STEP_MAX_RETRIES} 次）"
+                        )
+                    },
+                )
+                .await
+                .map_err(|_| ProjectMigrationError::Cancelled)?;
             }
             Err(error) => {
                 return Err(ProjectMigrationError::ProjectListFailed {
@@ -1428,12 +2201,6 @@ where
             }
         }
     }
-
-    Err(ProjectMigrationError::ProjectListFailed {
-        alias: alias.to_string(),
-        message: last_error
-            .unwrap_or_else(|| "project list rate limit retry exhausted".to_string()),
-    })
 }
 
 async fn refresh_audit<T>(

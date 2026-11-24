@@ -18,6 +18,8 @@ const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
 
 const TASK_EVENTS_PATH: &str = "/tasks/events";
 const TASK_EVENT_POLL_INTERVAL_MS: u64 = 1_000;
+const TASK_EVENT_STREAM_CHECK_INTERVAL_MS: u64 = 250;
+const TASK_EVENT_HEARTBEAT_TICKS: u32 = 4;
 
 pub fn run() -> io::Result<()> {
     let options = ServerOptions::from_args(env::args().skip(1));
@@ -472,21 +474,34 @@ fn handle_task_events_connection(
 
     let mut last_version = None;
     let mut last_payload = String::new();
+    let mut idle_ticks: u32 = 0;
     loop {
         let current_version = task_snapshot_feed.version();
-        let payload = if last_version == Some(current_version) {
-            task_event_heartbeat()
-        } else {
+        let payload = if last_version != Some(current_version) {
             last_version = Some(current_version);
-            task_event_frame(&task_snapshot_feed.list_snapshots(), &last_payload)?
+            idle_ticks = 0;
+            Some(task_event_frame(
+                &task_snapshot_feed.list_snapshots(),
+                &last_payload,
+            )?)
+        } else {
+            idle_ticks += 1;
+            if idle_ticks >= TASK_EVENT_HEARTBEAT_TICKS {
+                idle_ticks = 0;
+                Some(task_event_heartbeat())
+            } else {
+                None
+            }
         };
 
-        stream.write_all(payload.as_bytes())?;
-        stream.flush()?;
-        if !payload.starts_with(':') {
-            last_payload = payload;
+        if let Some(payload) = payload {
+            stream.write_all(payload.as_bytes())?;
+            stream.flush()?;
+            if !payload.starts_with(':') {
+                last_payload = payload;
+            }
         }
-        thread::sleep(Duration::from_millis(TASK_EVENT_POLL_INTERVAL_MS));
+        thread::sleep(Duration::from_millis(TASK_EVENT_STREAM_CHECK_INTERVAL_MS));
     }
 }
 

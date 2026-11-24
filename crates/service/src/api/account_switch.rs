@@ -102,6 +102,15 @@ impl ProjectMigrationControl for TaskProjectMigrationControl {
         };
         let _ = state.tasks.append_log(&self.task_id, level, event.message);
     }
+
+    fn on_wait_countdown(&self, current: u32, total: u32, message: String) {
+        let Ok(mut state) = self.shared_state.lock() else {
+            return;
+        };
+        let _ = state
+            .tasks
+            .update_active_wait_message(&self.task_id, current, total, message);
+    }
 }
 
 pub(super) fn plan_account_switch_response(state: &mut ApiState, body: &str) -> ApiResponse {

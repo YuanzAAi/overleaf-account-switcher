@@ -653,6 +653,38 @@ impl TaskStateStore {
         Ok(snapshot)
     }
 
+    pub fn update_active_wait_message(
+        &mut self,
+        task_id: impl AsRef<str>,
+        current: u32,
+        total: u32,
+        message: impl Into<String>,
+    ) -> Result<TaskSnapshot, TaskStateError> {
+        if total == 0 || current > total {
+            return Err(TaskStateError::InvalidProgress { current, total });
+        }
+
+        let task_id = task_id.as_ref();
+        self.ensure_task_can_change_state(task_id)?;
+        if self.tasks.get(task_id).map(|task| &task.phase) != Some(&ServiceTaskPhase::Running) {
+            return self.snapshot(task_id);
+        }
+
+        let sequence = self.next_task_sequence();
+        let message = sanitize_task_text(message.into());
+        let task = self.task_mut(task_id)?;
+        task.message = message.clone();
+        task.progress = Some(TaskProgress { current, total });
+        // 等待倒计时原位更新当前日志行，避免每秒追加新日志把近期日志刷屏挤掉。
+        if let Some(last_log) = task.logs.last_mut() {
+            last_log.message = message;
+        }
+        task.last_sequence = sequence;
+        let snapshot = task.clone();
+        self.publish_snapshots();
+        Ok(snapshot)
+    }
+
     pub fn request_cancel(
         &mut self,
         task_id: impl AsRef<str>,
@@ -1858,5 +1890,64 @@ impl From<TaskPhase> for ServiceTaskPhase {
 impl ServiceTaskPhase {
     fn is_terminal(&self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+}
+
+#[cfg(test)]
+mod wait_countdown_tests {
+    use super::*;
+
+    #[test]
+    fn update_active_wait_message_updates_last_log_in_place_and_rejects_terminal_task() {
+        let mut store = TaskStateStore::default();
+        let feed = store.snapshot_feed();
+        store
+            .start_task("migration-countdown", "迁移项目")
+            .expect("start task");
+        store
+            .set_progress(
+                "migration-countdown",
+                10,
+                37,
+                "项目 demo 的共享加入请求已达速率上限，等待 37 秒后继续",
+            )
+            .expect("set initial progress");
+        let initial = store
+            .append_log(
+                "migration-countdown",
+                TaskLogLevel::Info,
+                "项目 demo 的共享加入请求已达速率上限，等待 37 秒后继续",
+            )
+            .expect("append wait log");
+        let initial_log_count = initial.logs.len();
+        let initial_log_seq = initial.logs.last().expect("wait log").sequence;
+        let initial_version = feed.version();
+
+        let tick1 = store
+            .update_active_wait_message(
+                "migration-countdown",
+                10,
+                37,
+                "项目 demo 的共享加入请求已达速率上限，等待 36 秒后继续",
+            )
+            .expect("first countdown tick");
+        assert_eq!(tick1.logs.len(), initial_log_count);
+        assert_eq!(tick1.logs.last().expect("wait log").sequence, initial_log_seq);
+        assert_eq!(tick1.logs.last().expect("wait log").level, TaskLogLevel::Info);
+        assert_eq!(
+            tick1.message,
+            "项目 demo 的共享加入请求已达速率上限，等待 36 秒后继续"
+        );
+        assert_eq!(tick1.logs.last().expect("wait log").message, tick1.message);
+        assert!(tick1.last_sequence > initial.last_sequence);
+        assert!(feed.version() > initial_version);
+
+        store
+            .complete_task("migration-countdown", "迁移完成", None)
+            .expect("complete task");
+        let err = store
+            .update_active_wait_message("migration-countdown", 37, 37, "等待 1 秒后继续")
+            .expect_err("terminal task must reject wait countdown update");
+        assert!(matches!(err, TaskStateError::TerminalTask { .. }));
     }
 }
