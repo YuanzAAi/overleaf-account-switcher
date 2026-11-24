@@ -17,12 +17,10 @@ pub(super) fn refresh_account_subscriptions_response(
             },
         );
     };
-    if let Err(response) = start_alias_batch_task(
-        state,
-        Some(&task_id),
-        "刷新账号订阅状态",
-        &request.aliases,
-    ) {
+    // 订阅状态刷新会在启动和界面刷新时自动覆盖全部账号，仅合并元数据且已由 account_commit_lock 串行落盘，
+    // 不应占用任务级别名锁，否则会阻塞试用资格检查和账号卡片操作。
+    if let Err(response) = start_task_if_requested(state, Some(&task_id), "刷新账号订阅状态")
+    {
         return response;
     }
     let store = AccountStore::new(state.config.accounts_path());

@@ -718,6 +718,30 @@ impl LocalChromeCdpSession {
         })
     }
 
+    pub async fn wait_and_click_registration_payment_submit_with_cancel<F>(
+        &self,
+        should_cancel: F,
+    ) -> BrowserAutomationResult<CdpRegistrationState>
+    where
+        F: Fn() -> bool,
+    {
+        match await_with_cancel_and_timeout(
+            self.automation()
+                .wait_and_click_registration_payment_submit_with_cancel(&should_cancel),
+            STRIPE_PAYMENT_FIELD_WAIT_TIMEOUT,
+            &should_cancel,
+            || self.is_active(),
+        )
+        .await
+        {
+            StepAwaitOutcome::Completed(result) => result,
+            StepAwaitOutcome::Canceled => Err(BrowserAutomationError::Canceled),
+            StepAwaitOutcome::TimedOut => Err(BrowserAutomationError::Timeout {
+                operation: "wait for payment submit enabled (step timed out)".to_string(),
+            }),
+        }
+    }
+
     pub async fn wait_for_registration_payment_confirmation_with_cancel<F>(
         &self,
         should_cancel: F,

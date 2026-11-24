@@ -1145,13 +1145,73 @@ fn continue_registration_payment_with_card_retries_response(
             entry.context.trial_days,
             RegistrationState::SubmitPayment,
         );
-        let payment_result = entry.runtime.block_on(
+        // 先等待支付提交按钮就绪并点击；若在点击前触发 reCAPTCHA，不标记已提交卡号。
+        let submit_click_result = entry.runtime.block_on(
             entry
                 .session
-                .automation()
-                .submit_registration_payment_and_wait_thank_you(),
+                .wait_and_click_registration_payment_submit_with_cancel(&should_cancel),
         );
-        if (state.tasks.cancellation_requested(task_id) || !entry.session.is_active())
+        if (state.tasks.cancellation_requested(task_id)
+            || matches!(submit_click_result, Err(BrowserAutomationError::Canceled))
+            || !entry.session.is_active())
+            && !matches!(
+                submit_click_result,
+                Ok(CdpRegistrationState::SubscriptionSucceeded)
+            )
+        {
+            return cancel_active_registration_response(state, task_id, entry);
+        }
+        let payment_result = match submit_click_result {
+            Ok(CdpRegistrationState::AccountCreated) => entry.runtime.block_on(
+                entry
+                    .session
+                    .wait_for_registration_payment_confirmation_with_cancel(&should_cancel),
+            ),
+            Ok(CdpRegistrationState::SubscriptionSucceeded) => {
+                Ok(CdpRegistrationState::SubscriptionSucceeded)
+            }
+            Ok(other_state) => Ok(other_state),
+            Err(BrowserAutomationError::ChallengeRequired { .. }) => {
+                return registration_waiting_for_captcha_response(state, task_id, entry);
+            }
+            Err(error @ BrowserAutomationError::Other { .. }) => {
+                let message = error.to_string();
+                mark_registration_card_failed(
+                    state,
+                    task_id,
+                    &card_store,
+                    &selected_card_number,
+                    &message,
+                );
+                if entry.context.one_card_per_account {
+                    let _ = entry.runtime.block_on(entry.session.cleanup());
+                    return handle_registration_error(
+                        state,
+                        Some(task_id),
+                        AccountRegistrationError::Browser {
+                            message: "assigned payment card failed".to_string(),
+                        },
+                    );
+                }
+                let _ = state.tasks.append_log(
+                    task_id,
+                    TaskLogLevel::Warning,
+                    "当前银行卡校验或支付失败，正在尝试下一张可用卡",
+                );
+                continue;
+            }
+            Err(error) => {
+                let _ = entry.runtime.block_on(entry.session.cleanup());
+                return handle_registration_error(
+                    state,
+                    Some(task_id),
+                    AccountRegistrationError::from(error),
+                );
+            }
+        };
+        if (state.tasks.cancellation_requested(task_id)
+            || matches!(payment_result, Err(BrowserAutomationError::Canceled))
+            || !entry.session.is_active())
             && !matches!(
                 payment_result,
                 Ok(CdpRegistrationState::SubscriptionSucceeded)

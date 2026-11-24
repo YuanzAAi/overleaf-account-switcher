@@ -34,6 +34,9 @@ const EMAIL_CODE_AUTO_ADVANCE_GRACE_DELAY_MS: u64 = 200;
 const SUBSCRIPTION_PAGE_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const SUBSCRIPTION_PAGE_POLL_DELAY_MS: u64 = 500;
 const SUBSCRIPTION_PAGE_RENAVIGATE_AFTER: Duration = Duration::from_secs(5);
+const PAYMENT_SUBMIT_READY_TIMEOUT: Duration = Duration::from_secs(30);
+const PAYMENT_SUBMIT_POLL_DELAY_MS: u64 = 300;
+const PAYMENT_SUBMIT_PAGE_CHECK_INTERVAL: Duration = Duration::from_millis(1_500);
 const PAYMENT_CONFIRMATION_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 
 static CAPTCHA_WAITER_ID: AtomicU64 = AtomicU64::new(1);
@@ -574,14 +577,184 @@ where
     pub async fn submit_registration_payment_and_wait_thank_you(
         &self,
     ) -> BrowserAutomationResult<CdpRegistrationState> {
-        {
-            let mut session = self.session.lock().await;
-            let submit_result =
-                evaluate_action(&mut session, &submit_registration_payment_expression()).await?;
-            ensure_action_ok(submit_result)?;
+        let submit_state = self
+            .wait_and_click_registration_payment_submit_with_cancel(|| false)
+            .await?;
+        if submit_state == CdpRegistrationState::SubscriptionSucceeded {
+            return Ok(submit_state);
         }
 
         self.wait_for_registration_payment_confirmation().await
+    }
+
+    pub async fn wait_and_click_registration_payment_submit_with_cancel<F>(
+        &self,
+        should_cancel: F,
+    ) -> BrowserAutomationResult<CdpRegistrationState>
+    where
+        F: Fn() -> bool,
+    {
+        let use_wall_clock = self.options.poll_delay_ms > 0;
+        let started_at = Instant::now();
+        let remaining_budget = || {
+            use_wall_clock
+                .then(|| PAYMENT_SUBMIT_READY_TIMEOUT.saturating_sub(started_at.elapsed()))
+        };
+
+        let mut session = match await_subscription_op(
+            self.session.lock(),
+            remaining_budget(),
+            &should_cancel,
+        )
+        .await
+        {
+            SubscriptionAwaitOutcome::Completed(session) => session,
+            SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
+            SubscriptionAwaitOutcome::TimedOut => {
+                return Err(BrowserAutomationError::Timeout {
+                    operation: "wait for payment submit enabled (session busy)".to_string(),
+                });
+            }
+        };
+
+        let mut last_page_check = Instant::now()
+            .checked_sub(PAYMENT_SUBMIT_PAGE_CHECK_INTERVAL)
+            .unwrap_or_else(Instant::now);
+        let mut last_page_state = None;
+        let mut last_missing = "payment submit enabled".to_string();
+
+        loop {
+            if should_cancel() {
+                return Err(BrowserAutomationError::Canceled);
+            }
+            if use_wall_clock && started_at.elapsed() >= PAYMENT_SUBMIT_READY_TIMEOUT {
+                break;
+            }
+            let submit_result = match await_subscription_op(
+                evaluate_action(&mut session, &submit_registration_payment_expression()),
+                remaining_budget(),
+                &should_cancel,
+            )
+            .await
+            {
+                SubscriptionAwaitOutcome::Completed(result) => result?,
+                SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
+                SubscriptionAwaitOutcome::TimedOut => break,
+            };
+            if submit_result.ok {
+                return Ok(CdpRegistrationState::AccountCreated);
+            }
+            let missing = submit_result
+                .missing
+                .clone()
+                .unwrap_or_else(|| "payment submit enabled".to_string());
+            if !use_wall_clock {
+                return Err(BrowserAutomationError::ElementNotFound { selector: missing });
+            }
+            last_missing = missing;
+
+            // Stripe 地址/银行卡 iframe 失焦后，Overleaf 前端会异步校验与计算税费，
+            // 提交按钮通常需要数秒才从 disabled 变为可用；等待期间同步检测验证码与错误提示。
+            if last_page_check.elapsed() >= PAYMENT_SUBMIT_PAGE_CHECK_INTERVAL {
+                last_page_check = Instant::now();
+                let check_budget = remaining_budget().map(|r| r.min(Duration::from_secs(3)));
+                match await_subscription_op(
+                    read_login_page_state(&mut session),
+                    check_budget,
+                    &should_cancel,
+                )
+                .await
+                {
+                    SubscriptionAwaitOutcome::Completed(Ok(page_state)) => {
+                        if is_registration_payment_post_checkout_candidate(&page_state) {
+                            drop(session);
+                            return match await_subscription_op(
+                                self.open_registration_subscription_management(),
+                                remaining_budget(),
+                                &should_cancel,
+                            )
+                            .await
+                            {
+                                SubscriptionAwaitOutcome::Completed(result) => result,
+                                SubscriptionAwaitOutcome::Canceled => {
+                                    Err(BrowserAutomationError::Canceled)
+                                }
+                                SubscriptionAwaitOutcome::TimedOut => {
+                                    Err(BrowserAutomationError::Timeout {
+                                        operation: format!(
+                                            "wait for Overleaf subscription confirmation after payment{}",
+                                            registration_payment_state_diagnostic(&page_state)
+                                        ),
+                                    })
+                                }
+                            };
+                        }
+                        if page_state.robot_verification_blocked {
+                            return Err(BrowserAutomationError::RobotVerificationBlocked);
+                        }
+                        if classify_registration_page_state(&page_state)
+                            == CdpRegistrationState::ChallengeRequired
+                        {
+                            return Err(BrowserAutomationError::ChallengeRequired {
+                                challenge: "reCAPTCHA or robot verification".to_string(),
+                            });
+                        }
+                        if let Some(error) = detect_registration_payment_error(&page_state) {
+                            return Err(BrowserAutomationError::Other { message: error });
+                        }
+                        last_page_state = Some(page_state);
+                    }
+                    SubscriptionAwaitOutcome::Canceled => {
+                        return Err(BrowserAutomationError::Canceled);
+                    }
+                    SubscriptionAwaitOutcome::Completed(Err(_))
+                    | SubscriptionAwaitOutcome::TimedOut => {}
+                }
+            }
+
+            let sleep_budget = remaining_budget();
+            let sleep_delay = sleep_budget
+                .map(|remaining| remaining.min(Duration::from_millis(PAYMENT_SUBMIT_POLL_DELAY_MS)))
+                .unwrap_or_else(|| Duration::from_millis(PAYMENT_SUBMIT_POLL_DELAY_MS));
+            if sleep_delay.is_zero() {
+                break;
+            }
+            match await_subscription_op(
+                sleep_after_pending_check(sleep_delay.as_millis() as u64),
+                sleep_budget,
+                &should_cancel,
+            )
+            .await
+            {
+                SubscriptionAwaitOutcome::Completed(()) => {}
+                SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
+                SubscriptionAwaitOutcome::TimedOut => break,
+            }
+        }
+
+        if last_page_state.is_none() {
+            match await_subscription_op(
+                read_login_page_state(&mut session),
+                Some(Duration::from_secs(2)),
+                &should_cancel,
+            )
+            .await
+            {
+                SubscriptionAwaitOutcome::Completed(Ok(page_state)) => {
+                    last_page_state = Some(page_state);
+                }
+                SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
+                SubscriptionAwaitOutcome::Completed(Err(_))
+                | SubscriptionAwaitOutcome::TimedOut => {}
+            }
+        }
+        let diag = last_page_state
+            .as_ref()
+            .map(registration_payment_state_diagnostic)
+            .unwrap_or_else(|| " (page did not respond before timeout)".to_string());
+        Err(BrowserAutomationError::Timeout {
+            operation: format!("wait for {last_missing}{diag}"),
+        })
     }
 
     pub async fn wait_for_registration_payment_confirmation(
@@ -1561,18 +1734,33 @@ pub fn submit_registration_email_code_expression() -> String {
 
 pub fn submit_registration_payment_expression() -> String {
     r#"(() => {
+  const visible = node => {
+    if (!node) return false;
+    const style = window.getComputedStyle ? window.getComputedStyle(node) : null;
+    if (style && (style.visibility === 'hidden' || style.display === 'none')) return false;
+    return !!(node.offsetWidth || node.offsetHeight || node.getClientRects().length);
+  };
+  const isSubmitText = node => {
+    const text = (node.innerText || node.textContent || node.value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    return text.includes('upgrade now, pay after 7 days')
+      || text.includes('upgrade now')
+      || text.includes('start your free trial')
+      || text.includes('start free trial');
+  };
   const findSubmit = () => {
     const candidates = Array.from(document.querySelectorAll('button, input[type="submit"], a'));
-    const byText = candidates.find(node => {
-      const text = (node.innerText || node.textContent || node.value || '').trim().toLowerCase();
-      return text.includes('upgrade now, pay after 7 days') || text.includes('upgrade now');
-    });
-    if (byText) return byText;
-    return document.querySelector('button[type="submit"], input[type="submit"]');
+    const visibleByText = candidates.find(node => visible(node) && isSubmitText(node));
+    if (visibleByText) return visibleByText;
+    const typed = Array.from(document.querySelectorAll('button[type="submit"], input[type="submit"]'));
+    return typed.find(visible) || null;
   };
   const submit = findSubmit();
   if (!submit) return JSON.stringify({ ok: false, missing: 'payment submit' });
-  if (submit.disabled) return JSON.stringify({ ok: false, missing: 'payment submit enabled' });
+  const disabled = !!submit.disabled
+    || submit.getAttribute('aria-disabled') === 'true'
+    || submit.getAttribute('data-ol-loading') === 'true';
+  if (disabled) return JSON.stringify({ ok: false, missing: 'payment submit enabled' });
+  if (submit.scrollIntoView) submit.scrollIntoView({ block: 'center' });
   submit.click();
   return JSON.stringify({ ok: true });
 })()"#
