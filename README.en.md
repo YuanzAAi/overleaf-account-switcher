@@ -59,7 +59,7 @@ An agent can handle much of a LaTeX writing workflow, but going all-in on agents
 - **Bring your agent into the paper workflow.** Connect local material, Overleaf projects, and compiled PDFs with less uploading and copy-pasting.
 - **Move projects as you switch accounts.** When moving to an account with premium entitlements, handle project ownership and access as part of the switch.
 - **Keep your browser and skills on the same account.** Optionally synchronize Cookies and Git tokens during a browser switch instead of configuring each tool separately.
-- **Recover from an expired Cookie.** Accounts with saved passwords can attempt a fresh login and resume the task. reCAPTCHA and email verification wait for your input.
+- **Recover from an expired Cookie.** Accounts with saved passwords try HTTP login first, reusing device credentials saved after browser verification. A browser opens when the server requires reCAPTCHA. Device credentials are stored per account in the system keyring; temporary browser profiles are still cleaned up after the session.
 - **Keep compile timeouts out of the way.** With multiple accounts that have premium entitlements, browser switching and project migration let you move work to another premium account instead of staying constrained by the Free plan's compile limit.
 
 Compile limits generally follow the **project owner's** plan; switching a collaborator's account alone does not increase them. Overleaf Account Switcher does not alter entitlements. Trial eligibility and duration come from Overleaf. See [Overleaf's premium feature documentation](https://docs.overleaf.com/getting-started/free-and-premium-plans/premium-features).

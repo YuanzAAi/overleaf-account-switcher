@@ -219,6 +219,9 @@ pub fn resolve_account_cookies(
 
     let mut cookies = BTreeMap::new();
     for (cookie_name, reference) in &record.cookie_refs {
+        if cookie_name == overleaf_core::account::OVERLEAF_DEVICE_HISTORY_COOKIE {
+            continue;
+        }
         let value = read_secret(
             alias,
             "cookie",
@@ -246,6 +249,9 @@ pub fn resolve_account_cookies_for_recovery(
 
     let mut cookies = BTreeMap::new();
     for (cookie_name, reference) in &record.cookie_refs {
+        if cookie_name == overleaf_core::account::OVERLEAF_DEVICE_HISTORY_COOKIE {
+            continue;
+        }
         let value = read_secret(alias, "cookie", backend, reference, Some(cookie_name), true)?;
         cookies.insert(cookie_name.clone(), value);
     }
@@ -483,5 +489,76 @@ fn normalize_secret_read(
         Err(missing())
     } else {
         Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct MemorySecrets(Mutex<BTreeMap<String, String>>);
+
+    impl SecretBackend for MemorySecrets {
+        fn backend_id(&self) -> &str {
+            "memory"
+        }
+
+        fn write_secret(
+            &self,
+            reference: &SecretReference,
+            value: &str,
+        ) -> Result<(), SecretBackendError> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert(reference.key.clone(), value.into());
+            Ok(())
+        }
+
+        fn read_secret(&self, reference: &SecretReference) -> Result<String, SecretBackendError> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(&reference.key)
+                .cloned()
+                .ok_or_else(|| SecretBackendError::SecretNotFound {
+                    key: reference.key.clone(),
+                })
+        }
+
+        fn delete_secret(&self, reference: &SecretReference) -> Result<(), SecretBackendError> {
+            self.0.lock().unwrap().remove(&reference.key);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn device_history_uses_account_secret_storage_and_cleanup() {
+        let backend = MemorySecrets::default();
+        let mut record = AccountRecord::default();
+        let cookies = BTreeMap::from([
+            ("overleaf_session2".into(), "session".into()),
+            ("deviceHistory".into(), "device".into()),
+        ]);
+        write_account_cookie_secrets(&mut record, "account", &cookies, &backend).unwrap();
+        assert!(record.cookies.is_empty());
+        assert_eq!(
+            read_account_cookie_secret(&record, "account", "deviceHistory", &backend).unwrap(),
+            "device"
+        );
+        assert!(read_account_cookie_secret(&record, "other", "deviceHistory", &backend).is_err());
+        let session_only = BTreeMap::from([("overleaf_session2".into(), "session".into())]);
+        assert_eq!(
+            resolve_account_cookies(&record, "account", &backend).unwrap(),
+            session_only
+        );
+        assert_eq!(
+            resolve_account_cookies_for_recovery(&record, "account", &backend).unwrap(),
+            session_only
+        );
+        assert!(delete_account_secrets("account", &record, &[], &backend).is_empty());
+        assert!(backend.0.lock().unwrap().is_empty());
     }
 }

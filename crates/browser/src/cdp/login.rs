@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::automation::{
-    overleaf_session_cookie, BrowserAutoLoginInput, BrowserAutomation, BrowserAutomationError,
-    BrowserAutomationResult, CookieCapture, CredentialsLoginInput, GitTokenInput,
-    GitTokenPageState, GitTokenResult, LoginResult, PasswordChangeInput, PasswordChangeResult,
-    RegistrationInput, RegistrationResult, SecretText,
+    BrowserAutoLoginInput, BrowserAutomation, BrowserAutomationError, BrowserAutomationResult,
+    CookieCapture, CredentialsLoginInput, GitTokenInput, GitTokenPageState, GitTokenResult,
+    LoginResult, PasswordChangeInput, PasswordChangeResult, RegistrationInput, RegistrationResult,
+    SecretText,
 };
 use crate::cdp_session::{CdpSession, CdpSessionError, CdpTransport};
 
@@ -2735,17 +2735,14 @@ async fn login_result_from_session<T>(
 where
     T: CdpTransport,
 {
-    let cookie = session
-        .get_overleaf_session_cookie()
+    let cookies = session
+        .get_overleaf_login_cookies()
         .await
         .map_err(cdp_error)?;
     Ok(LoginResult {
         email,
         user_id: None,
-        cookies: vec![overleaf_session_cookie(
-            cookie.value,
-            cookie.expires.map(|value| value as i64),
-        )],
+        cookies: capture_login_cookies(cookies),
         trial_expiry: None,
         subscription_status: None,
         subscription_label: None,
@@ -2895,13 +2892,24 @@ async fn read_optional_overleaf_session_cookie<T>(session: &mut CdpSession<T>) -
 where
     T: CdpTransport,
 {
-    match session.get_overleaf_session_cookie().await {
-        Ok(cookie) => vec![overleaf_session_cookie(
-            cookie.value,
-            cookie.expires.map(|value| value as i64),
-        )],
+    match session.get_overleaf_login_cookies().await {
+        Ok(cookies) => capture_login_cookies(cookies),
         Err(_) => Vec::new(),
     }
+}
+
+fn capture_login_cookies(cookies: Vec<crate::cdp::CdpCookie>) -> Vec<CookieCapture> {
+    cookies
+        .into_iter()
+        .map(|cookie| CookieCapture {
+            name: cookie.name,
+            value: SecretText::new(cookie.value),
+            expiration_date: cookie
+                .expires
+                .filter(|expiry| *expiry >= 0.0)
+                .map(|expiry| expiry as i64),
+        })
+        .collect()
 }
 
 fn ensure_action_ok(action_result: CdpLoginActionResult) -> BrowserAutomationResult<()> {
@@ -3015,11 +3023,61 @@ fn cdp_error(error: CdpSessionError) -> BrowserAutomationError {
 }
 
 #[cfg(test)]
-mod payment_submission_tests {
+mod tests {
     use super::*;
     use crate::cdp::{CdpCommand, CdpResponse};
     use crate::cdp_session::CdpTransportError;
     use std::sync::Arc;
+
+    struct LoginCookieTransport {
+        include_session: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl CdpTransport for LoginCookieTransport {
+        async fn send(&self, command: &CdpCommand) -> Result<CdpResponse, CdpTransportError> {
+            assert_eq!(command.method, "Network.getCookies");
+            let urls = command.params.as_ref().unwrap()["urls"].as_array().unwrap();
+            let mut cookies = vec![serde_json::json!({"name":"tracking", "value":"ignored"})];
+            if self.include_session {
+                cookies.push(serde_json::json!({"name":"overleaf_session2", "value":"session", "expires": 2_000_000_000}));
+            }
+            if urls
+                .iter()
+                .any(|url| url.as_str() == Some(OVERLEAF_LOGIN_URL))
+            {
+                cookies.push(serde_json::json!({"name":"deviceHistory", "value":"device", "path":"/login", "expires": 2_100_000_000}));
+            }
+            Ok(CdpResponse {
+                id: Some(command.id),
+                result: Some(serde_json::json!({"cookies":cookies})),
+                error: None,
+            })
+        }
+    }
+
+    #[test]
+    fn login_retains_path_scoped_device_cookie_and_still_requires_session() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let automation = CdpLoginAutomation::new(CdpSession::new(LoginCookieTransport {
+            include_session: true,
+        }));
+        let login = runtime
+            .block_on(automation.finalize_login_result(Some("user@example.test".into())))
+            .unwrap();
+        assert_eq!(login.cookies.len(), 2);
+        assert_eq!(login.cookies[0].name, "overleaf_session2");
+        assert_eq!(login.cookies[0].expiration_date, Some(2_000_000_000));
+        assert_eq!(login.cookies[1].name, "deviceHistory");
+        let automation = CdpLoginAutomation::new(CdpSession::new(LoginCookieTransport {
+            include_session: false,
+        }));
+        assert!(runtime
+            .block_on(automation.finalize_login_result(None))
+            .is_err());
+    }
 
     struct PaymentTransport {
         cancelled: Arc<AtomicBool>,

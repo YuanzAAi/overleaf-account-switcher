@@ -1233,28 +1233,56 @@ impl CredentialBrowserItemJob {
         if email.is_empty() || password.trim().is_empty() {
             return None;
         }
-        self.log_stage(shared_state, TaskLogLevel::Info, "阶段：协议登录");
-        let (transport, user) = match runtime.block_on(
-            ReqwestSessionTransport::try_login_with_credentials(email, password),
-        ) {
-            Ok(Some(login)) => login,
-            Ok(None) => {
-                self.log_stage(
-                    shared_state,
-                    TaskLogLevel::Warning,
-                    "阶段：协议登录未建立会话，切换浏览器",
-                );
+        let device_history = self.store.load().ok().and_then(|document| {
+            let record = document.accounts.get(self.plan.alias())?;
+            if !record
+                .email
+                .as_deref()
+                .is_some_and(|stored| stored.trim().eq_ignore_ascii_case(email))
+            {
                 return None;
             }
-            Err(error) => {
-                self.log_stage(
-                    shared_state,
-                    TaskLogLevel::Warning,
-                    format!("阶段：协议登录未完成（{error}），切换浏览器"),
-                );
-                return None;
-            }
-        };
+            crate::account_secrets::read_account_cookie_secret_for_recovery(
+                record,
+                self.plan.alias(),
+                overleaf_core::account::OVERLEAF_DEVICE_HISTORY_COOKIE,
+                self.secret_backend.as_ref(),
+            )
+            .ok()
+        });
+        self.log_stage(
+            shared_state,
+            TaskLogLevel::Info,
+            if device_history.is_some() {
+                "阶段：协议登录（复用已验证设备凭据）"
+            } else {
+                "阶段：协议登录（无已验证设备凭据）"
+            },
+        );
+        let (transport, user) =
+            match runtime.block_on(ReqwestSessionTransport::try_login_with_device_history(
+                email,
+                password,
+                device_history.as_deref(),
+            )) {
+                Ok(Some(login)) => login,
+                Ok(None) => {
+                    self.log_stage(
+                        shared_state,
+                        TaskLogLevel::Warning,
+                        "阶段：协议登录未建立会话，切换浏览器",
+                    );
+                    return None;
+                }
+                Err(error) => {
+                    self.log_stage(
+                        shared_state,
+                        TaskLogLevel::Warning,
+                        format!("阶段：协议登录未完成（{error}），切换浏览器"),
+                    );
+                    return None;
+                }
+            };
         if browser_task_cancel_requested(shared_state, &self.task_id) {
             return None;
         }

@@ -3,8 +3,9 @@ use std::fmt;
 use serde_json::Value;
 
 use crate::cdp::{
-    browser_close_command, dom_text_command, execution_context_id_from_response,
-    frames_from_tree_response, input_insert_text_command, network_get_overleaf_cookies_command,
+    browser_close_command, cookies_from_response, dom_text_command,
+    execution_context_id_from_response, frames_from_tree_response, input_insert_text_command,
+    network_get_cookies_command, network_get_overleaf_cookies_command,
     network_set_overleaf_session_cookie_command, overleaf_session_cookie_from_response,
     page_create_isolated_world_command, page_get_frame_tree_command, page_navigate_command,
     runtime_evaluate_command, runtime_evaluate_in_context_command, runtime_evaluate_string,
@@ -217,6 +218,35 @@ where
 
         overleaf_session_cookie_from_response(&response)
             .ok_or(CdpSessionError::MissingOverleafSessionCookie)
+    }
+
+    pub async fn get_overleaf_login_cookies(&mut self) -> Result<Vec<CdpCookie>, CdpSessionError> {
+        let id = self.allocate_id();
+        // 设备验证凭据限定在 /login，查询根 URL 无法取得它。
+        let response = self
+            .send(network_get_cookies_command(
+                id,
+                [
+                    crate::cdp::DEFAULT_OVERLEAF_COOKIE_URL,
+                    crate::cdp::login::OVERLEAF_LOGIN_URL,
+                ],
+            ))
+            .await?;
+        let cookies = cookies_from_response(&response)
+            .into_iter()
+            .filter(|cookie| {
+                (cookie.name == crate::cdp::OVERLEAF_SESSION_COOKIE_NAME
+                    || cookie.name == overleaf_core::account::OVERLEAF_DEVICE_HISTORY_COOKIE)
+                    && !cookie.value.trim().is_empty()
+            })
+            .collect::<Vec<_>>();
+        if !cookies
+            .iter()
+            .any(|cookie| cookie.name == crate::cdp::OVERLEAF_SESSION_COOKIE_NAME)
+        {
+            return Err(CdpSessionError::MissingOverleafSessionCookie);
+        }
+        Ok(cookies)
     }
 
     pub async fn set_overleaf_session_cookie(

@@ -115,7 +115,7 @@ impl fmt::Display for SessionError {
             Self::Transport(err) => write!(f, "{err}"),
             Self::MissingCsrfToken => f.write_str("missing csrf token"),
             Self::MissingUserInfo => f.write_str("missing user info"),
-            Self::LoginVerificationRequired => f.write_str("登录接口不允许跳过验证"),
+            Self::LoginVerificationRequired => f.write_str("服务端要求本次登录完成人机验证"),
         }
     }
 }
@@ -166,6 +166,20 @@ impl ReqwestSessionTransport {
 
     pub fn session_expiry(&self) -> Option<i64> {
         self.session_expiry
+    }
+
+    fn cookie_header_for_path(&self, path: &str) -> String {
+        let path = path.split('?').next().unwrap_or(path);
+        let login_path = path == "/login" || path.starts_with("/login/");
+        self.cookies
+            .iter()
+            .filter(|(name, _)| {
+                login_path
+                    || name.as_str() != overleaf_core::account::OVERLEAF_DEVICE_HISTORY_COOKIE
+            })
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 
     fn capture_response_cookies(&mut self, response: &reqwest::Response) {
@@ -235,7 +249,7 @@ impl ReqwestSessionTransport {
             .client
             .post(format!("https://www.overleaf.com{path}"))
             .timeout(std::time::Duration::from_secs(20))
-            .header("cookie", format_cookie_header(&self.cookies))
+            .header("cookie", self.cookie_header_for_path(path))
             .header("x-csrf-token", csrf)
             .header("origin", "https://www.overleaf.com")
             .header("referer", format!("https://www.overleaf.com{referer}"))
@@ -340,10 +354,26 @@ impl ReqwestSessionTransport {
         email: &str,
         password: &str,
     ) -> SessionResult<Option<(Self, OverleafUserInfo)>> {
+        Self::try_login_with_device_history(email, password, None).await
+    }
+
+    pub async fn try_login_with_device_history(
+        email: &str,
+        password: &str,
+        device_history: Option<&str>,
+    ) -> SessionResult<Option<(Self, OverleafUserInfo)>> {
+        let email = overleaf_core::normalize_email(email);
         let mut transport = Self::new(BTreeMap::new());
+        if let Some(value) = device_history.filter(|value| !value.trim().is_empty()) {
+            transport.cookies.insert(
+                overleaf_core::account::OVERLEAF_DEVICE_HISTORY_COOKIE.to_string(),
+                value.to_string(),
+            );
+        }
         let client = transport.client.clone();
         let login_page = client
             .get("https://www.overleaf.com/login")
+            .header("cookie", format_cookie_header(&transport.cookies))
             .timeout(std::time::Duration::from_secs(20))
             .send()
             .await
@@ -364,6 +394,7 @@ impl ReqwestSessionTransport {
         let can_skip = client
             .post("https://www.overleaf.com/login/can-skip-captcha")
             .timeout(std::time::Duration::from_secs(20))
+            .header("accept", "application/json")
             .header("x-csrf-token", &csrf)
             .header("cookie", &cookie_header)
             .header("origin", "https://www.overleaf.com")
@@ -387,6 +418,7 @@ impl ReqwestSessionTransport {
         let login = client
             .post("https://www.overleaf.com/login")
             .timeout(std::time::Duration::from_secs(20))
+            .header("accept", "application/json")
             .header("x-csrf-token", &csrf)
             .header("cookie", format_cookie_header(&transport.cookies))
             .header("origin", "https://www.overleaf.com")
@@ -422,7 +454,7 @@ impl ReqwestSessionTransport {
         if user
             .email
             .as_deref()
-            .is_none_or(|actual| !actual.eq_ignore_ascii_case(email))
+            .is_none_or(|actual| !actual.eq_ignore_ascii_case(&email))
         {
             return Ok(None);
         }
@@ -444,8 +476,9 @@ impl ReqwestSessionTransport {
             ),
         ]);
 
-        if !self.cookies.is_empty() {
-            headers.insert("cookie".to_string(), format_cookie_header(&self.cookies));
+        let cookie_header = self.cookie_header_for_path(&request.path);
+        if !cookie_header.is_empty() {
+            headers.insert("cookie".to_string(), cookie_header);
         }
 
         Ok(PreparedSessionRequest {
@@ -694,4 +727,34 @@ fn string_field(value: &serde_json::Value, field: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_history_is_only_sent_to_login_paths() {
+        let transport = ReqwestSessionTransport::new(BTreeMap::from([
+            ("overleaf_session2".into(), "session".into()),
+            ("deviceHistory".into(), "device".into()),
+        ]));
+        for path in ["/login", "/login?redir=project", "/login/can-skip-captcha"] {
+            let prepared = transport
+                .prepare_request(&SessionPageRequest { path: path.into() })
+                .unwrap();
+            assert!(prepared.headers["cookie"].contains("deviceHistory=device"));
+        }
+        for path in [
+            "/project",
+            "/login-other",
+            "/user/settings",
+            "/oauth/personal-access-tokens",
+        ] {
+            let prepared = transport
+                .prepare_request(&SessionPageRequest { path: path.into() })
+                .unwrap();
+            assert_eq!(prepared.headers["cookie"], "overleaf_session2=session");
+        }
+    }
 }

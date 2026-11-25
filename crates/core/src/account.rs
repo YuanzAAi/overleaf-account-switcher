@@ -1,3 +1,5 @@
+pub const OVERLEAF_DEVICE_HISTORY_COOKIE: &str = "deviceHistory";
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AccountId(pub String);
 
