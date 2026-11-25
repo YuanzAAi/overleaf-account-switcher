@@ -1,4 +1,4 @@
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -71,6 +71,9 @@ pub async fn check() -> Result<UpdateInfo, String> {
         asset: None,
         image: None,
     };
+    let Some(release) = release else {
+        return Ok(info);
+    };
     let version = Version::parse(
         release
             .tag_name
@@ -101,7 +104,7 @@ pub async fn check() -> Result<UpdateInfo, String> {
     Ok(info)
 }
 
-async fn fetch_latest_release(client: &Client) -> Result<GithubRelease, String> {
+async fn fetch_latest_release(client: &Client) -> Result<Option<GithubRelease>, String> {
     let api_result = async {
         client
             .get(format!("https://api.github.com/repos/{REPOSITORY}/releases/latest"))
@@ -114,14 +117,23 @@ async fn fetch_latest_release(client: &Client) -> Result<GithubRelease, String> 
     }
     .await;
     match api_result {
-        Ok(release) => Ok(release),
+        Ok(release) => Ok(Some(release)),
         Err(api_error) => {
             let response = client
                 .head(format!("{}/latest", release_url(None)))
                 .timeout(Duration::from_secs(8))
                 .send()
                 .await
-                .and_then(reqwest::Response::error_for_status)
+                .map_err(|error| format!("无法读取 GitHub 发布版本: {api_error}; {error}"))?;
+            if api_error.status() == Some(StatusCode::NOT_FOUND)
+                && (response.status() == StatusCode::NOT_FOUND
+                    || (response.status().is_success()
+                        && response.url().as_str().trim_end_matches('/') == release_url(None)))
+            {
+                return Ok(None);
+            }
+            let response = response
+                .error_for_status()
                 .map_err(|error| format!("无法读取 GitHub 发布版本: {api_error}; {error}"))?;
             // 官方 latest 跳转可避开 API 限流；仅接受当前仓库的正式版本地址。
             let prefix = format!("{}/tag/", release_url(None));
@@ -130,12 +142,12 @@ async fn fetch_latest_release(client: &Client) -> Result<GithubRelease, String> 
                 .as_str()
                 .strip_prefix(&prefix)
                 .ok_or("GitHub 未返回有效的发布版本地址")?;
-            Ok(GithubRelease {
+            Ok(Some(GithubRelease {
                 tag_name: tag.to_string(),
                 draft: false,
                 prerelease: false,
                 assets: Vec::new(),
-            })
+            }))
         }
     }
 }
