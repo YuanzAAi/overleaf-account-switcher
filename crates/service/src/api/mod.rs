@@ -291,6 +291,7 @@ struct RegistrationSessionEntry {
     session: LocalChromeCdpSession,
     context: RegistrationSessionContext,
     submitted_payment_card: Option<String>,
+    attempted_payment_cards: BTreeSet<String>,
     last_activity: Instant,
 }
 
@@ -2335,7 +2336,10 @@ fn cancel_task_response(state: &mut ApiState, body: &str) -> ApiResponse {
                     task_id,
                     snapshot,
                     CancelledBrowserSessionKind::AccountBrowser,
-                    move || cleanup_account_browser_session_slot(slot),
+                    move || {
+                        cleanup_account_browser_session_slot(slot);
+                        false
+                    },
                 );
             }
             // CDP 会话归工作线程所有，清理结束前保留任务和账号锁。
@@ -2389,23 +2393,31 @@ fn enqueue_cancelled_browser_session_cleanup<F>(
     cleanup: F,
 ) -> ApiResponse
 where
-    F: FnOnce() + Send + 'static,
+    F: FnOnce() -> bool + Send + 'static,
 {
     let owned_task_id = task_id.to_string();
     let job = ApiBackgroundJob::new(kind.job_name(), move |shared_state| {
-        cleanup();
+        let payment_window_retained = cleanup();
         let Ok(mut state) = shared_state.lock() else {
             return;
         };
         let _ = state.tasks.append_log(
             &owned_task_id,
             TaskLogLevel::Warning,
-            kind.cleaned_log_message(),
+            if payment_window_retained {
+                REGISTRATION_PAYMENT_REVIEW_MESSAGE
+            } else {
+                kind.cleaned_log_message()
+            },
         );
         let _ = cancel_task_with_registration_release(
             &mut state,
             &owned_task_id,
-            kind.cancelled_message(),
+            if payment_window_retained {
+                REGISTRATION_PAYMENT_REVIEW_MESSAGE
+            } else {
+                kind.cancelled_message()
+            },
         );
     });
 
@@ -3489,6 +3501,7 @@ fn continue_account_browser_session_from_login_result(
                 one_card_per_account: false,
             },
             submitted_payment_card: None,
+            attempted_payment_cards: BTreeSet::new(),
             last_activity: Instant::now(),
         },
         now_unix,
@@ -4741,15 +4754,21 @@ fn take_registration_session(
     slot.entry.lock().ok().and_then(|mut guard| guard.take())
 }
 
-fn cleanup_registration_session(entry: RegistrationSessionEntry) {
+const REGISTRATION_PAYMENT_REVIEW_MESSAGE: &str =
+    "自动操作已停止，支付可能已提交；浏览器已保留，请核对订阅和自动续费状态后关闭";
+
+fn cleanup_registration_session(entry: RegistrationSessionEntry) -> bool {
+    let retained = entry
+        .session
+        .automation()
+        .registration_payment_may_be_submitted();
     let _ = entry.runtime.block_on(entry.session.cleanup());
+    retained
 }
 
-fn cleanup_registration_session_slot(slot: SessionSlot<RegistrationSessionEntry>) {
+fn cleanup_registration_session_slot(slot: SessionSlot<RegistrationSessionEntry>) -> bool {
     let entry = slot.entry.lock().ok().and_then(|mut guard| guard.take());
-    if let Some(entry) = entry {
-        cleanup_registration_session(entry);
-    }
+    entry.is_some_and(cleanup_registration_session)
 }
 
 fn insert_account_browser_session(
@@ -5295,10 +5314,15 @@ fn reconcile_registration_session_slot_unlocked(
         return;
     }
     if snapshot.cancel_requested {
-        cleanup_registration_session(entry);
+        let retained = cleanup_registration_session(entry);
         if let Ok(mut state) = shared_state.lock() {
             remove_registration_session_slot_if_same(&state, task_id, &slot);
-            let _ = cancel_task_with_registration_release(&mut state, task_id, "注册任务已取消");
+            let message = if retained {
+                REGISTRATION_PAYMENT_REVIEW_MESSAGE
+            } else {
+                "注册任务已取消"
+            };
+            let _ = cancel_task_with_registration_release(&mut state, task_id, message);
         }
         return;
     }
@@ -5322,13 +5346,15 @@ fn reconcile_registration_session_slot_unlocked(
         ACCOUNT_BROWSER_SESSION_TIMEOUT
     };
     if entry.last_activity.elapsed() >= wait_timeout {
-        cleanup_registration_session(entry);
+        let retained = cleanup_registration_session(entry);
         if let Ok(mut state) = shared_state.lock() {
             remove_registration_session_slot_if_same(&state, task_id, &slot);
             fail_tracked_task(
                 &mut state,
                 Some(task_id),
-                if waiting_for_input == Some(TaskUserInputKind::CaptchaCompleted) {
+                if retained {
+                    REGISTRATION_PAYMENT_REVIEW_MESSAGE
+                } else if waiting_for_input == Some(TaskUserInputKind::CaptchaCompleted) {
                     "reCAPTCHA 等待超时，浏览器会话已自动清理"
                 } else {
                     "注册浏览器会话等待超时，已自动清理"
@@ -5426,10 +5452,15 @@ fn reconcile_registration_session_slot_unlocked(
             }
         }
         Ok(Err(error)) => {
-            cleanup_registration_session(entry);
+            let retained = cleanup_registration_session(entry);
             if let Ok(mut state) = shared_state.lock() {
                 remove_registration_session_slot_if_same(&state, task_id, &slot);
-                fail_tracked_task(&mut state, Some(task_id), error.to_string());
+                let message = if retained {
+                    format!("{error}；{REGISTRATION_PAYMENT_REVIEW_MESSAGE}")
+                } else {
+                    error.to_string()
+                };
+                fail_tracked_task(&mut state, Some(task_id), message);
             }
         }
         Err(_) => {
@@ -5516,11 +5547,13 @@ fn reconcile_registration_sessions(state: &mut ApiState, now_unix: i64) {
             ACCOUNT_BROWSER_SESSION_TIMEOUT
         };
         if entry.last_activity.elapsed() >= wait_timeout {
-            cleanup_registration_session(entry);
+            let retained = cleanup_registration_session(entry);
             fail_tracked_task(
                 state,
                 Some(&task_id),
-                if waiting_for_input == Some(TaskUserInputKind::CaptchaCompleted) {
+                if retained {
+                    REGISTRATION_PAYMENT_REVIEW_MESSAGE
+                } else if waiting_for_input == Some(TaskUserInputKind::CaptchaCompleted) {
                     "reCAPTCHA 等待超时，浏览器会话已自动清理"
                 } else {
                     "注册浏览器会话等待超时，已自动清理"
@@ -5600,8 +5633,13 @@ fn reconcile_registration_sessions(state: &mut ApiState, now_unix: i64) {
                 }
             }
             Err(error) => {
-                cleanup_registration_session(entry);
-                fail_tracked_task(state, Some(&task_id), error.to_string());
+                let retained = cleanup_registration_session(entry);
+                let message = if retained {
+                    format!("{error}；{REGISTRATION_PAYMENT_REVIEW_MESSAGE}")
+                } else {
+                    error.to_string()
+                };
+                fail_tracked_task(state, Some(&task_id), message);
             }
         }
     }

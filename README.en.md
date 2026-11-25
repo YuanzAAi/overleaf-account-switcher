@@ -77,11 +77,15 @@ Import cards in bulk and filter by BIN and status. Registration draws from the s
 - **Independent tasks.** Each concurrent account has its own browser session, progress, logs, verification-code input, and cancellation control. A failed task or closed browser does not cancel the other accounts' tasks. Users complete reCAPTCHA in the corresponding browser.
 - **One card per account.** When enabled, accounts in the batch use distinct cards, and concurrency is capped by the valid cards matching the selected BIN and policy. Otherwise, cards may be reused under that policy. Card reservations are released after the batch ends; later tasks select cards according to their current status.
 
+After payment submission, cancellation, a network timeout, or unfinished verification leaves the browser open for manual review. Check whether the subscription took effect and renewal was cancelled before closing the window. Stopping the task does not reverse a payment already sent.
+
 ### Project management and selective migration
 
 Each account has an independent project window showing the project name, Owner, and last modification time, with search, select-all, and refresh controls. Operations such as copying, renaming, and archiving reload the list. The workspace, archive, and trash are separate views, with unarchive, restore, and owner-confirmed permanent deletion available where applicable.
 
 When migration is enabled, switching first opens a selection of the source account's workspace projects, all selected by default. Archived and trashed projects are excluded. Closing this window before confirming does not start the switch. Once confirmed, only selected projects are migrated, preserving their relative order in the source list. Owned projects are copied to the target account; shared projects are rejoined and their access verified. The browser switches afterward, with optional skills credential synchronization.
+
+If a clone request times out or returns a server error, the task rechecks the project list for the copy. An unresolved result is reported as a failure without repeating the clone in that run. Check the remote projects before retrying the switch.
 
 <a id="architecture"></a>
 

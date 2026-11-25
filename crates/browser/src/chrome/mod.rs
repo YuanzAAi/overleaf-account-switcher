@@ -1044,11 +1044,27 @@ impl LocalChromeCdpSession {
     }
 
     pub async fn cleanup(mut self) -> Result<(), LocalChromeAutomationError> {
+        if self
+            .automation
+            .as_ref()
+            .is_some_and(|automation| automation.registration_payment_may_be_submitted())
+        {
+            self.into_user_window();
+            return Ok(());
+        }
         self.automation.take();
         match self.launched.take() {
             Some(mut launched) => launched.cleanup().await,
             None => Ok(()),
         }
+    }
+
+    fn into_user_window(mut self) -> BrowserAutoLoginResult {
+        self.automation.take();
+        self.launched
+            .take()
+            .expect("local chrome CDP session already cleaned up")
+            .detach_user_window_cleanup()
     }
 
     fn launched(&self) -> &LaunchedChrome {
@@ -1127,8 +1143,16 @@ fn stripe_field_error_is_retryable(error: &StripeOopifError, attempts: usize) ->
 
 impl Drop for LocalChromeCdpSession {
     fn drop(&mut self) {
+        let keep_payment_window = self
+            .automation
+            .as_ref()
+            .is_some_and(|automation| automation.registration_payment_may_be_submitted());
         self.automation.take();
         if let Some(mut launched) = self.launched.take() {
+            if keep_payment_window {
+                launched.detach_user_window_cleanup();
+                return;
+            }
             let exited = matches!(launched.child.try_wait(), Ok(Some(_)));
             if !exited && launched.child.kill().is_ok() {
                 let _ = launched.child.wait();

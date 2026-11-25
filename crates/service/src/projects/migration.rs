@@ -417,6 +417,7 @@ where
     );
     let mut existing_owned_names = active_owned_project_names(&target_projects);
     let join_requests = Mutex::new([VecDeque::new(), VecDeque::new()]);
+    let uncertain_clones = Mutex::new(BTreeSet::new());
     let mut evidence = ProjectMigrationEvidence {
         target_projects,
         original_accessible: BTreeSet::new(),
@@ -463,8 +464,10 @@ where
             MigrationProgressContext {
                 control,
                 join_requests: &join_requests,
+                uncertain_clones: &uncertain_clones,
                 current,
                 total,
+                project_id: &plan.project_id,
                 project_name: &plan.project_name,
             },
         )
@@ -519,8 +522,10 @@ where
                 MigrationProgressContext {
                     control,
                     join_requests: &join_requests,
+                    uncertain_clones: &uncertain_clones,
                     current: total,
                     total,
+                    project_id: &plan.project_id,
                     project_name: &plan.project_name,
                 },
             )
@@ -572,11 +577,24 @@ fn project_migration_preview(
 ) -> ProjectMigrationPreviewReport {
     let mut will_migrate_count = 0;
     let mut skipped_existing_count = 0;
+    let evidence = ProjectMigrationEvidence {
+        target_projects: target_projects.to_vec(),
+        ..Default::default()
+    };
     let items = plans
         .iter()
         .map(|plan| {
-            let target_project_id = active_project_id_by_name(target_projects, &plan.project_name);
-            let status = if target_project_id.is_some() {
+            let confirmed = overleaf_workflows::is_migration_confirmed(plan, &evidence);
+            let target_project_id = if confirmed {
+                target_projects
+                    .iter()
+                    .find(|project| !project.trashed && project.id == plan.project_id)
+                    .map(|project| project.id.clone())
+                    .or_else(|| owned_project_id_by_name(target_projects, &plan.project_name, None))
+            } else {
+                None
+            };
+            let status = if confirmed {
                 skipped_existing_count += 1;
                 ProjectMigrationPreviewStatus::AlreadyExists
             } else {
@@ -852,8 +870,10 @@ fn notify_project_result(
 struct MigrationProgressContext<'a> {
     control: &'a (dyn ProjectMigrationControl + Send + Sync),
     join_requests: &'a Mutex<[VecDeque<Instant>; 2]>,
+    uncertain_clones: &'a Mutex<BTreeSet<String>>,
     current: u32,
     total: u32,
+    project_id: &'a str,
     project_name: &'a str,
 }
 
@@ -1036,7 +1056,9 @@ where
             Err(error) if is_rate_limited(&error) => {
                 let seconds = rate_limit_delay(&error, rate_limit_retries);
                 let error_message = project_api_error_message(error);
+                ensure_step_not_cancelled(progress.control)?;
                 if let Ok(tokens) = client.get_project_tokens(project_id).await {
+                    ensure_step_not_cancelled(progress.control)?;
                     if tokens.read_only.is_some() || tokens.read_and_write.is_some() {
                         return Ok(tokens);
                     }
@@ -1051,7 +1073,9 @@ where
             }
             Err(error) if is_transient_retryable_error(&error) => {
                 let error_message = project_api_error_message(error);
+                ensure_step_not_cancelled(progress.control)?;
                 if let Ok(tokens) = client.get_project_tokens(project_id).await {
+                    ensure_step_not_cancelled(progress.control)?;
                     if tokens.read_only.is_some() || tokens.read_and_write.is_some() {
                         return Ok(tokens);
                     }
@@ -1151,7 +1175,9 @@ where
             Err(error) if is_rate_limited(&error) => {
                 let seconds = rate_limit_delay(&error, rate_limit_retries);
                 let error_message = project_api_error_message(error);
+                ensure_step_not_cancelled(progress.control)?;
                 let target_projects = client.list_projects().await.unwrap_or_default();
+                ensure_step_not_cancelled(progress.control)?;
                 match resolve_join_attempt(
                     expected_project_id,
                     ApiAttemptResult::RateLimited,
@@ -1166,8 +1192,13 @@ where
                             ensure_step_not_cancelled(progress.control)?;
                             return Err(error_message);
                         }
-                        wait_after_rate_limit(progress, "加入共享项目", rate_limit_retries, seconds)
-                            .await?;
+                        wait_after_rate_limit(
+                            progress,
+                            "加入共享项目",
+                            rate_limit_retries,
+                            seconds,
+                        )
+                        .await?;
                         rate_limit_retries += 1;
                     }
                     JoinAttemptDecision::Failed => return Err(error_message),
@@ -1175,10 +1206,10 @@ where
             }
             Err(error) if is_transient_retryable_error(&error) => {
                 let error_message = project_api_error_message(error);
-                if active_project_id_exists(
-                    &client.list_projects().await.unwrap_or_default(),
-                    expected_project_id,
-                ) {
+                ensure_step_not_cancelled(progress.control)?;
+                let projects = client.list_projects().await.unwrap_or_default();
+                ensure_step_not_cancelled(progress.control)?;
+                if active_project_id_exists(&projects, expected_project_id) {
                     return Ok(Some(expected_project_id.to_string()));
                 }
                 if transient_retries >= TRANSIENT_STEP_MAX_RETRIES {
@@ -1195,10 +1226,9 @@ where
                     seconds,
                 )
                 .await?;
-                if active_project_id_exists(
-                    &client.list_projects().await.unwrap_or_default(),
-                    expected_project_id,
-                ) {
+                let projects = client.list_projects().await.unwrap_or_default();
+                ensure_step_not_cancelled(progress.control)?;
+                if active_project_id_exists(&projects, expected_project_id) {
                     return Ok(Some(expected_project_id.to_string()));
                 }
             }
@@ -1283,6 +1313,7 @@ where
         ensure_step_not_cancelled(progress.control)?;
         match client.list_projects().await {
             Ok(projects) => {
+                ensure_step_not_cancelled(progress.control)?;
                 if let Some(existing_id) =
                     owned_project_id_by_name(&projects, project_name, exclude_project_id)
                 {
@@ -1336,6 +1367,15 @@ async fn clone_project_with_retry<T>(
 where
     T: ProjectApiTransport,
 {
+    // 结果不明的写请求只允许核对；本轮最终审计也不能再次创建副本。
+    if progress
+        .uncertain_clones
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(progress.project_id)
+    {
+        return Err("克隆结果尚未确认，请核对远端项目后再重试".to_string());
+    }
     let mut rate_limit_retries = 0;
     let mut transient_retries = 0;
     loop {
@@ -1345,7 +1385,9 @@ where
             Err(error) if is_rate_limited(&error) => {
                 let seconds = rate_limit_delay(&error, rate_limit_retries);
                 let error_message = project_api_error_message(error);
+                ensure_step_not_cancelled(progress.control)?;
                 if let Ok(projects) = client.list_projects().await {
+                    ensure_step_not_cancelled(progress.control)?;
                     if let Some(existing_id) =
                         owned_project_id_by_name(&projects, project_name, exclude_project_id)
                     {
@@ -1375,41 +1417,46 @@ where
             }
             Err(error) if is_transient_retryable_error(&error) => {
                 let error_message = project_api_error_message(error);
-                // 克隆接口返回 5xx/超时时，服务端可能已落库；先快速核对清单，避免无意义等待或重复创建副本。
-                if let Ok(projects) = client.list_projects().await {
-                    if let Some(existing_id) =
-                        owned_project_id_by_name(&projects, project_name, exclude_project_id)
+                progress
+                    .uncertain_clones
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(progress.project_id.to_string());
+                loop {
+                    if let CloneRecoveryState::AlreadyCloned(existing_id) =
+                        confirm_clone_state_before_retry(
+                            client,
+                            project_name,
+                            exclude_project_id,
+                            progress,
+                            &error_message,
+                            &mut rate_limit_retries,
+                            &mut transient_retries,
+                        )
+                        .await?
                     {
+                        progress
+                            .uncertain_clones
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .remove(progress.project_id);
                         return Ok(existing_id);
                     }
-                }
-                if transient_retries >= TRANSIENT_STEP_MAX_RETRIES {
-                    ensure_step_not_cancelled(progress.control)?;
-                    return Err(error_message);
-                }
-                let seconds = transient_retry_delay(transient_retries);
-                transient_retries += 1;
-                wait_after_transient_error(
-                    progress,
-                    "克隆项目",
-                    transient_retries,
-                    &error_message,
-                    seconds,
-                )
-                .await?;
-                if let CloneRecoveryState::AlreadyCloned(existing_id) =
-                    confirm_clone_state_before_retry(
-                        client,
-                        project_name,
-                        exclude_project_id,
+                    if transient_retries >= TRANSIENT_STEP_MAX_RETRIES {
+                        return Err(format!(
+                            "{error_message}（克隆结果尚未确认，请核对远端项目后再重试）"
+                        ));
+                    }
+                    let seconds = transient_retry_delay(transient_retries);
+                    transient_retries += 1;
+                    wait_after_transient_error(
                         progress,
+                        "核对克隆结果",
+                        transient_retries,
                         &error_message,
-                        &mut rate_limit_retries,
-                        &mut transient_retries,
+                        seconds,
                     )
-                    .await?
-                {
-                    return Ok(existing_id);
+                    .await?;
                 }
             }
             Err(error) => return Err(project_api_error_message(error)),
@@ -1594,10 +1641,9 @@ mod retry_after_tests {
                     ));
                 }
                 if let Some(project_id) = rest.strip_suffix("/leave") {
-                    self.projects
-                        .lock()
-                        .unwrap()
-                        .retain(|project| project.get("id").and_then(|v| v.as_str()) != Some(project_id));
+                    self.projects.lock().unwrap().retain(|project| {
+                        project.get("id").and_then(|v| v.as_str()) != Some(project_id)
+                    });
                     return Ok(ProjectApiHttpResponse::new(200, "{}"));
                 }
             }
@@ -1708,7 +1754,52 @@ mod retry_after_tests {
     }
 
     #[test]
-    fn transient_500_retries_in_place_and_preserves_project_order() {
+    fn preview_matches_migration_audit_for_same_names_and_shared_access() {
+        let plans = vec![
+            ProjectMigrationPlan {
+                project_id: "source".into(),
+                project_name: "Paper".into(),
+                strategy: ProjectMigrationStrategy::OwnedProject,
+            },
+            ProjectMigrationPlan {
+                project_id: "shared".into(),
+                project_name: "Paper".into(),
+                strategy: ProjectMigrationStrategy::LinkSharingCollaboration,
+            },
+        ];
+        let mut owned = Project::new("copy", "Paper");
+        owned.access_level = overleaf_core::ProjectAccessLevel::Owner;
+        let preview = project_migration_preview("src", "dst", &plans, &[owned.clone()]);
+        assert_eq!(
+            preview.items[0].status,
+            ProjectMigrationPreviewStatus::AlreadyExists
+        );
+        assert_eq!(
+            preview.items[1].status,
+            ProjectMigrationPreviewStatus::WillMigrate
+        );
+        let preview = project_migration_preview(
+            "src",
+            "dst",
+            &plans,
+            &[
+                owned,
+                Project::new("source", "Paper"),
+                Project::new("shared", "Renamed"),
+            ],
+        );
+        assert_eq!(
+            preview.items[0].status,
+            ProjectMigrationPreviewStatus::WillMigrate
+        );
+        assert_eq!(
+            preview.items[1].target_project_id.as_deref(),
+            Some("shared")
+        );
+    }
+
+    #[test]
+    fn uncertain_clone_is_not_repeated_by_final_audit() {
         let source = ProjectApiClient::new(MockProjectTransport::new(vec![
             json!({"id": "p1", "name": "Oldest", "accessLevel": "owner", "trashed": false, "lastUpdated": "2024-01-01T00:00:00Z"}),
             json!({"id": "p2", "name": "Middle", "accessLevel": "owner", "trashed": false, "lastUpdated": "2024-01-02T00:00:00Z"}),
@@ -1724,16 +1815,20 @@ mod retry_after_tests {
         let target = ProjectApiClient::new(target_transport);
         let control = RecordingMigrationControl::default();
 
-        let report = runtime()
+        let error = runtime()
             .block_on(migrate_projects_between_clients_controlled(
                 "src", "dst", &source, &target, &control,
             ))
-            .expect("migration should recover in place");
+            .expect_err("an ambiguous clone must remain unconfirmed");
 
-        assert_eq!(report.migrated_count, 3);
-        assert_eq!(report.failed_count, 0);
-        assert_eq!(report.remigration_attempted_count, 0);
-        assert_eq!(*clone_calls.lock().unwrap(), vec!["p1", "p2", "p2", "p3"]);
+        assert!(matches!(
+            error,
+            ProjectMigrationError::AuditIncomplete {
+                failed_count: 1,
+                missing_count: 1
+            }
+        ));
+        assert_eq!(*clone_calls.lock().unwrap(), vec!["p1", "p2", "p3"]);
         let countdowns = control.countdown_messages.lock().unwrap();
         assert!(
             countdowns
@@ -1994,7 +2089,12 @@ where
         let remaining_secs = ceil_seconds(remaining);
         if remaining_secs > 0 && remaining_secs < last_reported_secs {
             last_reported_secs = remaining_secs;
-            notify_migration_wait_countdown(control, current, total, format_message(remaining_secs));
+            notify_migration_wait_countdown(
+                control,
+                current,
+                total,
+                format_message(remaining_secs),
+            );
         }
         tokio::time::sleep(remaining.min(interval)).await;
     }
@@ -2292,13 +2392,6 @@ fn active_project_id_exists(projects: &[Project], project_id: &str) -> bool {
     projects
         .iter()
         .any(|project| !project.trashed && project.id == project_id)
-}
-
-fn active_project_id_by_name(projects: &[Project], project_name: &str) -> Option<String> {
-    projects
-        .iter()
-        .find(|project| !project.trashed && project.name == project_name)
-        .map(|project| project.id.clone())
 }
 
 fn item(

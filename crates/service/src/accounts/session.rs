@@ -533,6 +533,7 @@ pub async fn refresh_saved_account_sessions_in_store_with_backend(
             backend,
             &crate::ReqwestAccountSessionMetadataRefresher,
             None,
+            None,
         )
         .await;
         items.push(AccountSessionRefreshBatchItem::from_result(
@@ -551,6 +552,7 @@ pub(crate) async fn refresh_saved_account_session_with_commit_lock(
     backend: &dyn SecretBackend,
     refresher: &(dyn crate::AccountSessionMetadataRefresher + Send + Sync),
     commit_lock: Option<&Mutex<()>>,
+    fallback_trial_expiry: Option<i64>,
 ) -> Result<AccountSessionRefreshReport, AccountSessionError> {
     let mut snapshot = store.load().map_err(AccountSessionError::from_io)?;
     let original = snapshot.accounts.get(alias).cloned().ok_or_else(|| {
@@ -559,9 +561,17 @@ pub(crate) async fn refresh_saved_account_session_with_commit_lock(
         }
     })?;
     let cookies = cookies_for_saved_session(&original, alias, backend)?;
-    let result = refresher
+    let mut result = refresher
         .refresh_with_cookies(&mut snapshot, alias, &cookies, now_unix)
         .await;
+    if let Ok(metadata) = &mut result {
+        if metadata.trial_expiry.is_none() && fallback_trial_expiry.is_some() {
+            metadata.trial_expiry = fallback_trial_expiry;
+            if let Some(record) = snapshot.accounts.get_mut(alias) {
+                record.set_trial_expiry(fallback_trial_expiry.map(|expiry| expiry as f64));
+            }
+        }
+    }
     if result
         .as_ref()
         .is_err_and(|error| !error.requires_cookie_recovery())

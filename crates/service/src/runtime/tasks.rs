@@ -1303,8 +1303,8 @@ impl TaskStateStore {
     }
 
     fn publish_snapshots(&self) {
-        self.snapshot_feed.replace(self.list_snapshots());
         let Some(mirror_queue) = self.mirror_queue.as_ref() else {
+            self.snapshot_feed.replace(self.list_snapshots());
             return;
         };
         let Ok(mut mirrored_sequences) = self.mirrored_sequences.lock() else {
@@ -1896,6 +1896,22 @@ impl ServiceTaskPhase {
 #[cfg(test)]
 mod wait_countdown_tests {
     use super::*;
+
+    #[test]
+    fn worker_updates_reach_the_main_feed_through_the_mirror() {
+        let mut store = TaskStateStore::default();
+        store.start_task("registration", "注册").unwrap();
+        let queue = Arc::new(Mutex::new(VecDeque::new()));
+        let mut worker = store.clone();
+        worker.mirror_updates_to(Arc::clone(&queue));
+        let worker_feed = worker.snapshot_feed();
+        let worker_version = worker_feed.version();
+        worker.set_progress("registration", 1, 2, "填写支付信息").unwrap();
+        assert_eq!(worker_feed.version(), worker_version);
+        let next = queue.lock().unwrap().pop_front().unwrap();
+        store.apply_mirrored_snapshot(next);
+        assert_eq!(store.snapshot_feed().list_snapshots()[0].message, "填写支付信息");
+    }
 
     #[test]
     fn update_active_wait_message_updates_last_log_in_place_and_rejects_terminal_task() {

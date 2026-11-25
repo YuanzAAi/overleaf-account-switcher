@@ -55,6 +55,7 @@ pub struct CdpLoginAutomation<T> {
     options: CdpLoginOptions,
     use_current_page_for_next_submission: AtomicBool,
     return_immediately_on_visible_challenge: AtomicBool,
+    registration_payment_pending: AtomicBool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,12 +186,22 @@ where
             options,
             use_current_page_for_next_submission: AtomicBool::new(false),
             return_immediately_on_visible_challenge: AtomicBool::new(false),
+            registration_payment_pending: AtomicBool::new(false),
         }
     }
 
     pub fn use_current_page_for_next_submission(&self) {
         self.use_current_page_for_next_submission
             .store(true, Ordering::Release);
+    }
+
+    pub fn registration_payment_may_be_submitted(&self) -> bool {
+        self.registration_payment_pending.load(Ordering::Acquire)
+    }
+
+    pub fn clear_registration_payment_submission(&self) {
+        self.registration_payment_pending
+            .store(false, Ordering::Release);
     }
 
     pub fn return_immediately_on_visible_challenge(&self) {
@@ -370,21 +381,18 @@ where
             use_wall_clock.then(|| SUBSCRIPTION_PAGE_WAIT_TIMEOUT.saturating_sub(started_at.elapsed()))
         };
 
-        let mut session = match await_subscription_op(
-            self.session.lock(),
-            remaining_budget(),
-            &should_cancel,
-        )
-        .await
-        {
-            SubscriptionAwaitOutcome::Completed(session) => session,
-            SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
-            SubscriptionAwaitOutcome::TimedOut => {
-                return Err(BrowserAutomationError::Timeout {
-                    operation: "wait for Overleaf subscription page (session busy)".to_string(),
-                });
-            }
-        };
+        let mut session =
+            match await_subscription_op(self.session.lock(), remaining_budget(), &should_cancel)
+                .await
+            {
+                SubscriptionAwaitOutcome::Completed(session) => session,
+                SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
+                SubscriptionAwaitOutcome::TimedOut => {
+                    return Err(BrowserAutomationError::Timeout {
+                        operation: "wait for Overleaf subscription page (session busy)".to_string(),
+                    });
+                }
+            };
 
         match await_subscription_op(
             session.navigate(&subscription_url),
@@ -594,6 +602,12 @@ where
     where
         F: Fn() -> bool,
     {
+        if should_cancel() {
+            return Err(BrowserAutomationError::Canceled);
+        }
+        if self.registration_payment_may_be_submitted() {
+            return Ok(CdpRegistrationState::AccountCreated);
+        }
         let use_wall_clock = self.options.poll_delay_ms > 0;
         let started_at = Instant::now();
         let remaining_budget = || {
@@ -601,21 +615,18 @@ where
                 .then(|| PAYMENT_SUBMIT_READY_TIMEOUT.saturating_sub(started_at.elapsed()))
         };
 
-        let mut session = match await_subscription_op(
-            self.session.lock(),
-            remaining_budget(),
-            &should_cancel,
-        )
-        .await
-        {
-            SubscriptionAwaitOutcome::Completed(session) => session,
-            SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
-            SubscriptionAwaitOutcome::TimedOut => {
-                return Err(BrowserAutomationError::Timeout {
-                    operation: "wait for payment submit enabled (session busy)".to_string(),
-                });
-            }
-        };
+        let mut session =
+            match await_subscription_op(self.session.lock(), remaining_budget(), &should_cancel)
+                .await
+            {
+                SubscriptionAwaitOutcome::Completed(session) => session,
+                SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
+                SubscriptionAwaitOutcome::TimedOut => {
+                    return Err(BrowserAutomationError::Timeout {
+                        operation: "wait for payment submit enabled (session busy)".to_string(),
+                    });
+                }
+            };
 
         let mut last_page_check = Instant::now()
             .checked_sub(PAYMENT_SUBMIT_PAGE_CHECK_INTERVAL)
@@ -631,7 +642,7 @@ where
                 break;
             }
             let submit_result = match await_subscription_op(
-                evaluate_action(&mut session, &submit_registration_payment_expression()),
+                evaluate_action(&mut session, &registration_payment_submit_expression(false)),
                 remaining_budget(),
                 &should_cancel,
             )
@@ -642,7 +653,39 @@ where
                 SubscriptionAwaitOutcome::TimedOut => break,
             };
             if submit_result.ok {
-                return Ok(CdpRegistrationState::AccountCreated);
+                if should_cancel() {
+                    return Err(BrowserAutomationError::Canceled);
+                }
+                // 发出点击后即使丢失 CDP 响应也可能已支付，不能把超时当作尚未提交。
+                self.registration_payment_pending
+                    .store(true, Ordering::Release);
+                let click = await_subscription_op(
+                    session.evaluate_string(submit_registration_payment_expression(), false),
+                    remaining_budget(),
+                    &should_cancel,
+                )
+                .await;
+                match click {
+                    SubscriptionAwaitOutcome::Completed(Ok(value)) => {
+                        let result = parse_action_result(&value)?;
+                        if result.ok {
+                            return Ok(CdpRegistrationState::AccountCreated);
+                        }
+                        self.clear_registration_payment_submission();
+                    }
+                    SubscriptionAwaitOutcome::Completed(Err(error)) => {
+                        return Err(cdp_error(error))
+                    }
+                    SubscriptionAwaitOutcome::Canceled => {
+                        return Err(BrowserAutomationError::Canceled)
+                    }
+                    SubscriptionAwaitOutcome::TimedOut => {
+                        return Err(BrowserAutomationError::Timeout {
+                            operation: "payment submission response; payment outcome is unknown"
+                                .to_string(),
+                        })
+                    }
+                }
             }
             let missing = submit_result
                 .missing
@@ -700,6 +743,7 @@ where
                             });
                         }
                         if let Some(error) = detect_registration_payment_error(&page_state) {
+                            self.clear_registration_payment_submission();
                             return Err(BrowserAutomationError::Other { message: error });
                         }
                         last_page_state = Some(page_state);
@@ -779,17 +823,14 @@ where
                 .then(|| PAYMENT_CONFIRMATION_WAIT_TIMEOUT.saturating_sub(started_at.elapsed()))
         };
 
-        let mut session = match await_subscription_op(
-            self.session.lock(),
-            remaining_budget(),
-            &should_cancel,
-        )
-        .await
-        {
-            SubscriptionAwaitOutcome::Completed(session) => session,
-            SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
-            SubscriptionAwaitOutcome::TimedOut => {
-                return Err(BrowserAutomationError::Timeout {
+        let mut session =
+            match await_subscription_op(self.session.lock(), remaining_budget(), &should_cancel)
+                .await
+            {
+                SubscriptionAwaitOutcome::Completed(session) => session,
+                SubscriptionAwaitOutcome::Canceled => return Err(BrowserAutomationError::Canceled),
+                SubscriptionAwaitOutcome::TimedOut => {
+                    return Err(BrowserAutomationError::Timeout {
                     operation:
                         "wait for Overleaf subscription confirmation after payment (session busy)"
                             .to_string(),
@@ -836,6 +877,7 @@ where
                 };
             }
             if let Some(error) = detect_registration_payment_error(&page_state) {
+                self.clear_registration_payment_submission();
                 return Err(BrowserAutomationError::Other { message: error });
             }
             last_page_state = Some(page_state.clone());
@@ -1733,6 +1775,10 @@ pub fn submit_registration_email_code_expression() -> String {
 }
 
 pub fn submit_registration_payment_expression() -> String {
+    registration_payment_submit_expression(true)
+}
+
+fn registration_payment_submit_expression(click: bool) -> String {
     r#"(() => {
   const visible = node => {
     if (!node) return false;
@@ -1760,11 +1806,13 @@ pub fn submit_registration_payment_expression() -> String {
     || submit.getAttribute('aria-disabled') === 'true'
     || submit.getAttribute('data-ol-loading') === 'true';
   if (disabled) return JSON.stringify({ ok: false, missing: 'payment submit enabled' });
-  if (submit.scrollIntoView) submit.scrollIntoView({ block: 'center' });
-  submit.click();
+  if (__CLICK__) {
+    if (submit.scrollIntoView) submit.scrollIntoView({ block: 'center' });
+    submit.click();
+  }
   return JSON.stringify({ ok: true });
 })()"#
-        .to_string()
+        .replace("__CLICK__", if click { "true" } else { "false" })
 }
 
 pub fn open_subscription_management_expression() -> String {
@@ -2963,5 +3011,73 @@ async fn sleep_after_pending_check(poll_delay_ms: u64) {
 fn cdp_error(error: CdpSessionError) -> BrowserAutomationError {
     BrowserAutomationError::ExternalDriver {
         message: error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod payment_submission_tests {
+    use super::*;
+    use crate::cdp::{CdpCommand, CdpResponse};
+    use crate::cdp_session::CdpTransportError;
+    use std::sync::Arc;
+
+    struct PaymentTransport {
+        cancelled: Arc<AtomicBool>,
+        calls: Arc<AtomicU64>,
+        lose_response: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl CdpTransport for PaymentTransport {
+        async fn send(&self, command: &CdpCommand) -> Result<CdpResponse, CdpTransportError> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 1 {
+                if self.lose_response {
+                    return Err(CdpTransportError::new(
+                        "Cannot find context with specified id",
+                    ));
+                }
+                self.cancelled.store(true, Ordering::SeqCst);
+                return std::future::pending().await;
+            }
+            Ok(CdpResponse {
+                id: Some(command.id),
+                result: Some(
+                    serde_json::json!({"result": {"type": "string", "value": "{\"ok\":true}"}}),
+                ),
+                error: None,
+            })
+        }
+    }
+
+    #[test]
+    fn interrupted_click_keeps_unknown_submission_and_never_replays() {
+        for (cancel_before, lose_response) in [(true, false), (false, false), (false, true)] {
+            let cancelled = Arc::new(AtomicBool::new(cancel_before));
+            let calls = Arc::new(AtomicU64::new(0));
+            let automation = CdpLoginAutomation::new(CdpSession::new(PaymentTransport {
+                cancelled: Arc::clone(&cancelled),
+                calls: Arc::clone(&calls),
+                lose_response,
+            }));
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap();
+            let result = runtime.block_on(
+                automation.wait_and_click_registration_payment_submit_with_cancel(|| {
+                    cancelled.load(Ordering::SeqCst)
+                }),
+            );
+            assert!(result.is_err());
+            assert_eq!(
+                automation.registration_payment_may_be_submitted(),
+                !cancel_before
+            );
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                if cancel_before { 0 } else { 2 }
+            );
+        }
     }
 }

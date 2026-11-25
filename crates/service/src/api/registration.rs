@@ -97,6 +97,7 @@ pub(super) fn continue_registration_with_new_credentials_response(
     let one_card_per_account = entry.context.one_card_per_account;
     let password = SecretText::new(input.password);
     entry.submitted_payment_card = None;
+    entry.attempted_payment_cards.clear();
     entry.context = RegistrationSessionContext {
         alias_hint: alias_hint.clone(),
         existing_alias: None,
@@ -494,6 +495,16 @@ fn continue_registration_after_submitted_payment_response(
                             &card_store,
                             &card_number,
                             &message,
+                        );
+                    }
+                    if !entry.context.one_card_per_account {
+                        let _ = state.tasks.append_log(
+                            task_id,
+                            TaskLogLevel::Warning,
+                            "当前银行卡支付失败，正在尝试下一张可用卡",
+                        );
+                        return continue_registration_subscription_forms_response(
+                            state, task_id, entry, now_unix,
                         );
                     }
                     let _ = entry.runtime.block_on(entry.session.cleanup());
@@ -908,7 +919,6 @@ fn continue_registration_payment_with_card_retries_response(
     now_unix: i64,
 ) -> ApiResponse {
     let card_store = CardStore::new(state.config.cards_path());
-    let mut attempted_cards = BTreeSet::new();
 
     loop {
         if state.tasks.cancellation_requested(task_id) {
@@ -917,7 +927,7 @@ fn continue_registration_payment_with_card_retries_response(
         let card_document = match card_store.load() {
             Ok(document) => document,
             Err(error) => {
-                let message = if attempted_cards.is_empty() {
+                let message = if entry.attempted_payment_cards.is_empty() {
                     format!("订阅页已打开，但无法读取银行卡库: {error}")
                 } else {
                     "payment cards exhausted after retries".to_string()
@@ -930,7 +940,7 @@ fn continue_registration_payment_with_card_retries_response(
                 );
             }
         };
-        let mut unavailable_cards = attempted_cards.clone();
+        let mut unavailable_cards = entry.attempted_payment_cards.clone();
         let reservation_store = Arc::clone(&state.registration_card_reservations);
         let mut reservations = if entry.context.one_card_per_account {
             match reservation_store.lock() {
@@ -950,7 +960,12 @@ fn continue_registration_payment_with_card_retries_response(
             None
         };
         if let Some(reservations) = reservations.as_ref() {
-            unavailable_cards.extend(reservations.values().cloned());
+            unavailable_cards.extend(
+                reservations
+                    .iter()
+                    .filter(|(owner, _)| owner.as_str() != task_id)
+                    .map(|(_, number)| number.clone()),
+            );
         }
         let selected = select_payment_card_with_strategy_and_bin_with_backend_at(
             &card_document,
@@ -967,7 +982,7 @@ fn continue_registration_payment_with_card_retries_response(
         let card = match selected {
             Ok(Some(card)) => card,
             Ok(None) => {
-                let message = if attempted_cards.is_empty() {
+                let message = if entry.attempted_payment_cards.is_empty() {
                     if entry.context.one_card_per_account {
                         "no unreserved payment card is available".to_string()
                     } else {
@@ -1002,7 +1017,6 @@ fn continue_registration_payment_with_card_retries_response(
                 );
             }
         };
-        attempted_cards.insert(card.number.clone());
 
         set_registration_task_step(
             state,
@@ -1024,16 +1038,20 @@ fn continue_registration_payment_with_card_retries_response(
             cvc: card.cvc,
         };
         let selected_card_number = card.number.clone();
+        entry.submitted_payment_card = None;
+        entry
+            .session
+            .automation()
+            .clear_registration_payment_submission();
         let should_cancel = task_cancel_checker(state, task_id);
-        let mut fill_result = entry.runtime.block_on(
+        let mut fill_result =
             entry
-                .session
-                .fill_registration_payment_frames_with_cancel(
+                .runtime
+                .block_on(entry.session.fill_registration_payment_frames_with_cancel(
                     address.clone(),
                     payment.clone(),
                     &should_cancel,
-                ),
-        );
+                ));
         if state.tasks.cancellation_requested(task_id)
             || matches!(fill_result, Err(BrowserAutomationError::Canceled))
             || (fill_result.is_err() && !entry.session.is_active())
@@ -1151,6 +1169,16 @@ fn continue_registration_payment_with_card_retries_response(
                 .session
                 .wait_and_click_registration_payment_submit_with_cancel(&should_cancel),
         );
+        if entry
+            .session
+            .automation()
+            .registration_payment_may_be_submitted()
+        {
+            entry.submitted_payment_card = Some(selected_card_number.clone());
+            entry
+                .attempted_payment_cards
+                .insert(selected_card_number.clone());
+        }
         if (state.tasks.cancellation_requested(task_id)
             || matches!(submit_click_result, Err(BrowserAutomationError::Canceled))
             || !entry.session.is_active())
@@ -1175,6 +1203,9 @@ fn continue_registration_payment_with_card_retries_response(
                 return registration_waiting_for_captcha_response(state, task_id, entry);
             }
             Err(error @ BrowserAutomationError::Other { .. }) => {
+                entry
+                    .attempted_payment_cards
+                    .insert(selected_card_number.clone());
                 let message = error.to_string();
                 mark_registration_card_failed(
                     state,
@@ -1201,6 +1232,17 @@ fn continue_registration_payment_with_card_retries_response(
                 continue;
             }
             Err(error) => {
+                if entry
+                    .session
+                    .automation()
+                    .registration_payment_may_be_submitted()
+                {
+                    let _ = state.tasks.append_log(
+                        task_id,
+                        TaskLogLevel::Warning,
+                        REGISTRATION_PAYMENT_REVIEW_MESSAGE,
+                    );
+                }
                 let _ = entry.runtime.block_on(entry.session.cleanup());
                 return handle_registration_error(
                     state,
@@ -1247,6 +1289,7 @@ fn continue_registration_payment_with_card_retries_response(
                 );
             }
             Err(error @ BrowserAutomationError::Other { .. }) => {
+                entry.submitted_payment_card = None;
                 let message = error.to_string();
                 mark_registration_card_failed(
                     state,
@@ -1277,6 +1320,17 @@ fn continue_registration_payment_with_card_retries_response(
                 return registration_waiting_for_captcha_response(state, task_id, entry);
             }
             Err(error) => {
+                if entry
+                    .session
+                    .automation()
+                    .registration_payment_may_be_submitted()
+                {
+                    let _ = state.tasks.append_log(
+                        task_id,
+                        TaskLogLevel::Warning,
+                        REGISTRATION_PAYMENT_REVIEW_MESSAGE,
+                    );
+                }
                 let _ = entry.runtime.block_on(entry.session.cleanup());
                 return handle_registration_error(
                     state,
@@ -1438,6 +1492,10 @@ fn continue_registration_after_payment_success_response(
         TaskLogLevel::Info,
         "已确认订阅取消完成，继续提取账号资料",
     );
+    entry
+        .session
+        .automation()
+        .clear_registration_payment_submission();
 
     finalize_registration_session_response(state, task_id, entry, now_unix)
 }
@@ -1651,9 +1709,13 @@ fn cancel_active_registration_response(
     task_id: &str,
     entry: RegistrationSessionEntry,
 ) -> ApiResponse {
-    cleanup_registration_session(entry);
-    match cancel_task_with_registration_release(state, task_id, "注册任务已取消并清理浏览器会话")
-    {
+    let retained = cleanup_registration_session(entry);
+    let message = if retained {
+        REGISTRATION_PAYMENT_REVIEW_MESSAGE
+    } else {
+        "注册任务已取消并清理浏览器会话"
+    };
+    match cancel_task_with_registration_release(state, task_id, message) {
         Ok(snapshot) => json_response(200, &snapshot),
         Err(error) => task_state_error_response(error),
     }
@@ -1728,31 +1790,22 @@ fn save_finalized_registration_result(
             state.secret_backend.as_ref(),
         )?
     };
+    drop(_commit_guard);
     let fallback_trial_expiry = report.trial_expiry;
-    let mut document = store.load().map_err(|error| AccountRegistrationError::Io {
-        message: error.to_string(),
-    })?;
 
-    match entry
-        .runtime
-        .block_on(state.metadata_refresher.refresh_with_cookies(
-            &mut document,
+    match entry.runtime.block_on(
+        crate::account_session::refresh_saved_account_session_with_commit_lock(
+            &store,
             &report.alias,
-            &cookies,
             now_unix,
-        )) {
+            state.secret_backend.as_ref(),
+            state.metadata_refresher.as_ref(),
+            Some(&commit_lock),
+            fallback_trial_expiry,
+        ),
+    ) {
         Ok(metadata) => {
             report.trial_expiry = metadata.trial_expiry.or(fallback_trial_expiry);
-            if metadata.trial_expiry.is_none() {
-                if let Some(record) = document.accounts.get_mut(&report.alias) {
-                    record.set_trial_expiry(fallback_trial_expiry.map(|value| value as f64));
-                }
-            }
-            store
-                .save(&document)
-                .map_err(|error| AccountRegistrationError::Io {
-                    message: error.to_string(),
-                })?;
             let _ = state.tasks.append_log(
                 task_id,
                 TaskLogLevel::Info,
@@ -1768,11 +1821,12 @@ fn save_finalized_registration_result(
         }
     }
 
-    if let Some(days) = document
-        .accounts
-        .get(&report.alias)
-        .and_then(|record| record.trial_duration_days())
-    {
+    if let Some(days) = store.load().ok().and_then(|document| {
+        document
+            .accounts
+            .get(&report.alias)
+            .and_then(|record| record.trial_duration_days())
+    }) {
         report.trial_days = days;
     }
     Ok(report)
@@ -2395,6 +2449,7 @@ fn run_existing_cookie_trial_worker(
             one_card_per_account: false,
         },
         submitted_payment_card: None,
+        attempted_payment_cards: BTreeSet::new(),
         last_activity: Instant::now(),
     };
     continue_existing_trial_response(state, task_id, entry, now_unix, continuation)
@@ -2890,6 +2945,7 @@ fn run_existing_account_trial_worker(
             one_card_per_account: false,
         },
         submitted_payment_card: None,
+        attempted_payment_cards: BTreeSet::new(),
         last_activity: Instant::now(),
     };
     continue_existing_trial_response(state, task_id, entry, now_unix, continuation)
@@ -3129,6 +3185,7 @@ fn register_account_with_local_chrome_session_response(
             one_card_per_account,
         },
         submitted_payment_card: None,
+        attempted_payment_cards: BTreeSet::new(),
         last_activity: Instant::now(),
     };
     handle_registration_session_result(state, task_id, entry, result, now_unix)
