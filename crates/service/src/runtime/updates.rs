@@ -1,4 +1,4 @@
-use reqwest::{Client, StatusCode};
+use reqwest::Client;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -57,18 +57,11 @@ pub async fn check() -> Result<UpdateInfo, String> {
             "overleaf-account-switcher/",
             env!("CARGO_PKG_VERSION")
         ))
-        .connect_timeout(Duration::from_secs(8))
-        .timeout(Duration::from_secs(20))
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(12))
         .build()
         .map_err(|error| error.to_string())?;
-    let response = client
-        .get(format!(
-            "https://api.github.com/repos/{REPOSITORY}/releases/latest"
-        ))
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await
-        .map_err(|error| format!("无法连接 GitHub: {error}"))?;
+    let release = fetch_latest_release(&client).await?;
     let mut info = UpdateInfo {
         current_version: env!("CARGO_PKG_VERSION"),
         latest_version: None,
@@ -78,15 +71,6 @@ pub async fn check() -> Result<UpdateInfo, String> {
         asset: None,
         image: None,
     };
-    if response.status() == StatusCode::NOT_FOUND {
-        return Ok(info);
-    }
-    let release: GithubRelease = response
-        .error_for_status()
-        .map_err(|error| format!("GitHub 版本检查失败: {error}"))?
-        .json()
-        .await
-        .map_err(|error| format!("无法读取发布信息: {error}"))?;
     let version = Version::parse(
         release
             .tag_name
@@ -115,6 +99,45 @@ pub async fn check() -> Result<UpdateInfo, String> {
     ));
     info.tag = Some(release.tag_name);
     Ok(info)
+}
+
+async fn fetch_latest_release(client: &Client) -> Result<GithubRelease, String> {
+    let api_result = async {
+        client
+            .get(format!("https://api.github.com/repos/{REPOSITORY}/releases/latest"))
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<GithubRelease>()
+            .await
+    }
+    .await;
+    match api_result {
+        Ok(release) => Ok(release),
+        Err(api_error) => {
+            let response = client
+                .head(format!("{}/latest", release_url(None)))
+                .timeout(Duration::from_secs(8))
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status)
+                .map_err(|error| format!("无法读取 GitHub 发布版本: {api_error}; {error}"))?;
+            // 官方 latest 跳转可避开 API 限流；仅接受当前仓库的正式版本地址。
+            let prefix = format!("{}/tag/", release_url(None));
+            let tag = response
+                .url()
+                .as_str()
+                .strip_prefix(&prefix)
+                .ok_or("GitHub 未返回有效的发布版本地址")?;
+            Ok(GithubRelease {
+                tag_name: tag.to_string(),
+                draft: false,
+                prerelease: false,
+                assets: Vec::new(),
+            })
+        }
+    }
 }
 
 pub(super) fn response(method: &str) -> crate::ApiResponse {

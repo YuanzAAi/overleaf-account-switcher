@@ -23,6 +23,7 @@ import {
   setupAccountMenus,
   setupAccountWorkbench,
   setupPageNavigation,
+  setActivePage,
   setupSidebarToggle,
   setupUiTheme,
   submitAccountDeleteModal,
@@ -100,6 +101,11 @@ import {
 export function setupControls() {
   setupSyncSkillsPreference();
   document.getElementById("check-updates").addEventListener("click", checkForUpdates);
+  document.getElementById("update-notification").addEventListener("click", () => {
+    setActivePage("settings");
+    document.getElementById("app-update-card").scrollIntoView({ block: "nearest" });
+    document.querySelector("#app-update-card button:not([hidden]):not(:disabled)")?.focus({ preventScroll: true });
+  });
   document.getElementById("install-update").addEventListener("click", installUpdate);
   document.getElementById("copy-update-command").addEventListener("click", copyDockerUpdateCommand);
   document.getElementById("skills-list").addEventListener("click", (event) => manageSkill(event.target.closest("[data-skill-action]")));

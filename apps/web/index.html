@@ -20,6 +20,7 @@
           <div id="profile-avatar" class="profile-avatar">?</div>
           <select id="profile-select" class="profile-select" aria-label="选择 Chrome 档案"></select>
           <button id="profile-redetect" class="inline-action ui-btn" type="button">重检</button>
+          <button id="update-notification" class="inline-action ui-btn" type="button" title="查看应用更新" aria-label="查看应用更新" hidden><span class="status-led" aria-hidden="true"></span>更新</button>
         </div>
         <button id="topbar-onboarding" class="ui-btn" type="button" data-open-onboarding title="安装教程" aria-label="安装教程">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>
@@ -720,8 +721,8 @@
           </div>
           <div id="runtime-health-strip" class="runtime-health-strip" aria-label="运行状态摘要"></div>
           <div class="settings-runtime-grid">
-            <section class="settings-card settings-card-wide">
-              <div class="settings-card-head"><h3>应用更新</h3><span class="app-version muted">v0.1.1</span></div>
+            <section id="app-update-card" class="settings-card settings-card-wide">
+              <div class="settings-card-head"><h3>应用更新</h3><span class="app-version muted"></span></div>
               <div class="settings-action-row">
                 <button id="check-updates" type="button">检查更新</button>
                 <button id="install-update" type="button" hidden>下载并更新</button>

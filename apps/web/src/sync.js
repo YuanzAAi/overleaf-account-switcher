@@ -1,4 +1,5 @@
 import { isPlainObject } from "./tasks/results.js";
+import { checkForUpdatesIfDue } from "./updates.js";
 import { fetchJson, fetchOptionalJson, request } from "./http.js";
 import {
   recordClientRuntimeError,
@@ -873,6 +874,7 @@ export function checkServiceHealth() {
       ]);
       state.config = config;
       renderStatus(health);
+      if (health?.status === "ok") checkForUpdatesIfDue();
       return health;
     } catch (error) {
       if (state.serviceHealth !== "unavailable") {

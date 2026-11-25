@@ -5,6 +5,7 @@ import { writeClipboard } from "./format.js";
 
 const dockerCommand = "docker compose -f docker/compose.yml pull\ndocker compose -f docker/compose.yml up -d --no-build";
 let release = null;
+let nextCheckAt = 0;
 
 function updateStatus(message) {
   document.getElementById("update-status").textContent = message;
@@ -12,35 +13,45 @@ function updateStatus(message) {
 
 function renderUpdateActions() {
   const available = Boolean(release?.available);
+  const notification = document.getElementById("update-notification");
+  notification.hidden = !available;
+  notification.title = available ? `发现新版本 v${release.latest_version}，查看更新` : "查看应用更新";
+  notification.setAttribute("aria-label", notification.title);
   const docker = state.config?.deployment === "docker";
   const native = typeof window.__OVERLEAF_DESKTOP__?.installUpdate === "function";
   const download = document.getElementById("download-update");
   document.getElementById("install-update").hidden = !available || !native || docker;
-  download.hidden = !available || native || docker || !release.asset;
-  if (!download.hidden) download.href = release.asset.browser_download_url;
+  download.hidden = !available || native || docker;
+  if (!download.hidden) download.href = release.asset?.browser_download_url || release.release_url;
   else download.removeAttribute("href");
   document.getElementById("docker-update").hidden = !available || !docker;
   document.getElementById("docker-update-image").textContent = release?.image || "";
   document.getElementById("docker-update-command").textContent = dockerCommand;
 }
 
-export async function checkForUpdates() {
+export function checkForUpdatesIfDue() {
+  if (!document.hidden && Date.now() >= nextCheckAt) void checkForUpdates({ silent: true });
+}
+
+export async function checkForUpdates({ silent = false } = {}) {
   const button = document.getElementById("check-updates");
   if (button.disabled) return;
   button.disabled = true;
-  release = null;
-  renderUpdateActions();
+  document.getElementById("install-update").disabled = true;
   updateStatus("正在检查更新");
   try {
     release = await fetchJson(endpoints.updates, 25000);
+    nextCheckAt = Date.now() + (release.latest_version ? 6 * 60 * 60 * 1000 : 5 * 60 * 1000);
     updateStatus(!release.latest_version ? "暂无公开稳定版本"
       : release.available ? `发现新版本 v${release.latest_version}` : "当前已是最新版本");
     renderUpdateActions();
   } catch (error) {
-    updateStatus("检查失败，请稍后重试");
-    reportUiOperationFailure({ scope: "检查应用更新", route: endpoints.updates, error, title: "检查更新失败" });
+    nextCheckAt = Date.now() + 5 * 60 * 1000;
+    updateStatus(release?.available ? `发现新版本 v${release.latest_version}；本次检查未完成` : "检查未完成，将自动重试");
+    if (!silent) reportUiOperationFailure({ scope: "检查应用更新", route: endpoints.updates, error, title: "检查更新失败" });
   } finally {
     button.disabled = false;
+    document.getElementById("install-update").disabled = false;
   }
 }
 
@@ -48,20 +59,21 @@ export async function installUpdate() {
   const install = window.__OVERLEAF_DESKTOP__?.installUpdate;
   const button = document.getElementById("install-update");
   if (!release?.available || !install || button.disabled) return;
-  const accepted = await showConfirmDialog({
-    eyebrow: "应用更新",
-    title: `更新到 v${release.latest_version}`,
-    message: "下载并校验更新后，应用将退出并重新打开。账号数据保持不变。",
-    points: ["请先完成或取消正在运行和等待验证的任务。"],
-    confirmText: "下载并更新",
-    tone: "info",
-  });
-  if (!accepted) return;
+  const update = release;
   button.disabled = true;
   document.getElementById("check-updates").disabled = true;
-  updateStatus("正在下载并校验更新");
   try {
-    await install(release.tag);
+    const accepted = await showConfirmDialog({
+      eyebrow: "应用更新",
+      title: `更新到 v${update.latest_version}`,
+      message: "下载并校验更新后，应用将退出并重新打开。账号数据保持不变。",
+      points: ["请先完成或取消正在运行和等待验证的任务。"],
+      confirmText: "下载并更新",
+      tone: "info",
+    });
+    if (!accepted) return;
+    updateStatus("正在下载并校验更新");
+    await install(update.tag);
     updateStatus("更新就绪，正在重启");
   } catch (error) {
     updateStatus("更新未完成");
