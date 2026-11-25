@@ -493,12 +493,12 @@ fn normalize_secret_read(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::Mutex;
 
     #[derive(Default)]
-    struct MemorySecrets(Mutex<BTreeMap<String, String>>);
+    pub(crate) struct MemorySecrets(Mutex<BTreeMap<String, String>>);
 
     impl SecretBackend for MemorySecrets {
         fn backend_id(&self) -> &str {

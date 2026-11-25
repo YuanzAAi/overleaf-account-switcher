@@ -446,7 +446,7 @@ fn continue_registration_after_submitted_payment_response(
             let _ = state.tasks.append_log(
                 task_id,
                 TaskLogLevel::Info,
-                "验证已通过，正在确认已提交的支付结果（不会重复提交）",
+                "验证已通过，正在确认支付结果",
             );
             let should_cancel = task_cancel_checker(state, task_id);
             let confirmation_result = entry.runtime.block_on(
@@ -886,7 +886,7 @@ fn continue_registration_subscription_forms_response(
             let _ = state.tasks.append_log(
                 task_id,
                 TaskLogLevel::Warning,
-                format!("地址 API 获取失败，使用 fallback 地址: {message}"),
+                format!("地址 API 获取失败，使用备用地址: {message}"),
             );
         }
     }

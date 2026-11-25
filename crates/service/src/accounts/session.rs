@@ -613,26 +613,7 @@ pub(crate) async fn refresh_saved_account_session_with_commit_lock(
     }
     if result.is_ok() {
         let updated = &snapshot.accounts[alias];
-        if record.email != updated.email
-            || record.user_id != updated.user_id
-            || (updated.subscription_status.as_deref() != Some("free")
-                && (record.subscription_status != updated.subscription_status
-                    || record.trial_expiry != updated.trial_expiry))
-        {
-            record.ineligible_trial_days.clear();
-        }
-        if updated.subscription_status.as_deref() == Some("free") {
-            record.trial_started_at = None;
-        }
-        record.set_trial_expiry(updated.trial_expiry);
-        record.subscription_status = updated.subscription_status.clone();
-        record.subscription_label = updated.subscription_label.clone();
-        record.subscription_checked_at = updated.subscription_checked_at;
-        record.email = updated.email.clone();
-        record.user_id = updated.user_id.clone();
-        if updated.last_login_at > record.last_login_at {
-            record.last_login_at = updated.last_login_at;
-        }
+        merge_account_session_metadata(record, updated);
     } else {
         record.subscription_status = Some("unknown".into());
         record.subscription_label = None;
@@ -642,6 +623,89 @@ pub(crate) async fn refresh_saved_account_session_with_commit_lock(
         .save(&document)
         .map_err(AccountSessionError::from_io)?;
     result
+}
+
+pub(crate) struct AccountSessionSnapshot {
+    original: AccountRecord,
+    cookies: Option<BTreeMap<String, String>>,
+    session_cookie: Option<String>,
+}
+
+impl AccountSessionSnapshot {
+    pub(crate) fn capture(
+        record: &AccountRecord,
+        alias: &str,
+        backend: &dyn SecretBackend,
+    ) -> Self {
+        let cookies =
+            crate::account_secrets::resolve_account_cookies_for_recovery(record, alias, backend)
+                .ok();
+        let session_cookie = cookies
+            .as_ref()
+            .and_then(|cookies| cookies.get(overleaf_api::OVERLEAF_SESSION_COOKIE))
+            .cloned()
+            .or_else(|| {
+                crate::account_secrets::read_account_cookie_secret_for_recovery(
+                    record,
+                    alias,
+                    overleaf_api::OVERLEAF_SESSION_COOKIE,
+                    backend,
+                )
+                .ok()
+            });
+        Self {
+            original: record.clone(),
+            cookies,
+            session_cookie,
+        }
+    }
+
+    pub(crate) fn cookies(&self) -> Option<&BTreeMap<String, String>> {
+        self.cookies.as_ref()
+    }
+
+    pub(crate) fn matches(
+        &self,
+        record: &AccountRecord,
+        alias: &str,
+        backend: &dyn SecretBackend,
+    ) -> bool {
+        record.email == self.original.email
+            && record.created_at == self.original.created_at
+            && record.cookie_refs == self.original.cookie_refs
+            && record.cookie_updated_at == self.original.cookie_updated_at
+            && crate::account_secrets::read_account_cookie_secret_for_recovery(
+                record,
+                alias,
+                overleaf_api::OVERLEAF_SESSION_COOKIE,
+                backend,
+            )
+            .ok()
+                == self.session_cookie
+    }
+}
+
+pub(crate) fn merge_account_session_metadata(record: &mut AccountRecord, updated: &AccountRecord) {
+    if record.email != updated.email
+        || record.user_id != updated.user_id
+        || (updated.subscription_status.as_deref() != Some("free")
+            && (record.subscription_status != updated.subscription_status
+                || record.trial_expiry != updated.trial_expiry))
+    {
+        record.ineligible_trial_days.clear();
+    }
+    if updated.subscription_status.as_deref() == Some("free") {
+        record.trial_started_at = None;
+    }
+    record.set_trial_expiry(updated.trial_expiry);
+    record.subscription_status = updated.subscription_status.clone();
+    record.subscription_label = updated.subscription_label.clone();
+    record.subscription_checked_at = updated.subscription_checked_at;
+    record.email = updated.email.clone();
+    record.user_id = updated.user_id.clone();
+    if updated.last_login_at > record.last_login_at {
+        record.last_login_at = updated.last_login_at;
+    }
 }
 
 fn cookies_for_saved_session(
@@ -818,5 +882,45 @@ impl From<AccountSecretStoreError> for AccountSessionError {
                 ),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::account_secrets::{tests::MemorySecrets, write_account_cookie_secrets};
+
+    #[test]
+    fn session_snapshot_detects_secret_rotation_with_unchanged_references_and_timestamp() {
+        let backend = MemorySecrets::default();
+        let mut record = AccountRecord {
+            email: Some("alpha@example.com".into()),
+            cookie_updated_at: Some(100.0),
+            ..Default::default()
+        };
+        write_account_cookie_secrets(
+            &mut record,
+            "alpha",
+            &BTreeMap::from([(
+                overleaf_api::OVERLEAF_SESSION_COOKIE.into(),
+                "old-session".into(),
+            )]),
+            &backend,
+        )
+        .unwrap();
+        let snapshot = AccountSessionSnapshot::capture(&record, "alpha", &backend);
+        let original = record.clone();
+        write_account_cookie_secrets(
+            &mut record,
+            "alpha",
+            &BTreeMap::from([(
+                overleaf_api::OVERLEAF_SESSION_COOKIE.into(),
+                "replacement-session".into(),
+            )]),
+            &backend,
+        )
+        .unwrap();
+        assert_eq!(record, original);
+        assert!(!snapshot.matches(&record, "alpha", &backend));
     }
 }

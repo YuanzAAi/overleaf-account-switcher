@@ -258,6 +258,94 @@ pub fn apply_git_token_page_state_in_store_with_backend(
     Ok(report)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_browser_git_token_with_commit_lock(
+    store: &AccountStore,
+    alias: &str,
+    browser: &(dyn BrowserAutomation + Send + Sync),
+    generate: bool,
+    now_unix: i64,
+    backend: &dyn SecretBackend,
+    commit_lock: &std::sync::Mutex<()>,
+    expected_session: Option<&crate::account_session::AccountSessionSnapshot>,
+) -> Result<Option<AccountGitTokenRefreshReport>, AccountGitTokenError> {
+    let (original_session, input) = {
+        let _guard = commit_lock.lock().map_err(|_| AccountGitTokenError::Io {
+            message: "account commit lock poisoned".to_string(),
+        })?;
+        let snapshot = store.load().map_err(AccountGitTokenError::from_io)?;
+        let original = snapshot.accounts.get(alias).ok_or_else(|| {
+            AccountGitTokenError::AccountAliasNotFound {
+                alias: alias.to_string(),
+            }
+        })?;
+        if expected_session.is_some_and(|expected| !expected.matches(original, alias, backend)) {
+            return Err(AccountGitTokenError::Browser {
+                message: "目标账号在浏览器操作前已变更，请重新提交任务".to_string(),
+            });
+        }
+        if generate && has_reusable_git_token(original, alias, now_unix, backend) {
+            return Ok(None);
+        }
+        let original_session =
+            crate::account_session::AccountSessionSnapshot::capture(original, alias, backend);
+        let input = GitTokenInput {
+            overleaf_session: SecretText::new(session_cookie_for_git_token(
+                original, alias, backend,
+            )?),
+        };
+        (original_session, input)
+    };
+    let state = if generate {
+        let result = browser
+            .extract_git_token_with_cookie(input)
+            .await
+            .map_err(|error| AccountGitTokenError::from_browser(alias, error))?;
+        let token = result
+            .token
+            .filter(|token| !token.is_empty())
+            .ok_or_else(|| AccountGitTokenError::TokenNotAvailable {
+                alias: alias.to_string(),
+            })?;
+        GitTokenPageState {
+            visible_token: Some(token.into_inner()),
+            expiry: result.expires_at,
+            has_existing_masked_token: false,
+            can_generate_token: false,
+            can_add_another_token: false,
+        }
+    } else {
+        let state = browser
+            .read_git_token_state_with_cookie(input)
+            .await
+            .map_err(|error| AccountGitTokenError::from_browser(alias, error))?;
+        GitTokenPageState {
+            visible_token: state.visible_token.map(SecretText::into_inner),
+            expiry: state.expires_at,
+            has_existing_masked_token: state.has_existing_masked_token,
+            can_generate_token: state.can_generate_token,
+            can_add_another_token: state.can_add_another_token,
+        }
+    };
+    let _guard = commit_lock.lock().map_err(|_| AccountGitTokenError::Io {
+        message: "account commit lock poisoned".to_string(),
+    })?;
+    let mut document = store.load().map_err(AccountGitTokenError::from_io)?;
+    if !document
+        .accounts
+        .get(alias)
+        .is_some_and(|record| original_session.matches(record, alias, backend))
+    {
+        return Err(AccountGitTokenError::Browser {
+            message: "目标账号在 Git token 操作期间已变更，请核对远端令牌状态".to_string(),
+        });
+    }
+    let (report, journal) =
+        apply_git_token_page_state_internal(&mut document, alias, &state, backend)?;
+    save_git_document_with_rollback(store, &document, vec![journal], backend)?;
+    Ok(Some(report))
+}
+
 pub async fn refresh_account_git_token_metadata_with_browser_with_backend(
     document: &mut AccountsDocument,
     alias: &str,

@@ -508,9 +508,9 @@ fn api_capabilities_status() -> ApiCapabilityStatus {
             "skip_user_window_profiles",
         ],
         development_cache_policy: vec![
-            "preserve_reusable_docker_and_cargo_cache_during_active_iteration",
-            "use_space_reports_and_warning_thresholds_for_routine_monitoring",
-            "deep_cache_cleanup_only_for_final_delivery_cache_bloat_low_space_or_explicit_request",
+            "preserve_reusable_build_and_dependency_cache",
+            "report_cache_size_and_warning_thresholds",
+            "cache_cleanup_requires_explicit_confirmation",
         ],
         embedded_ui_assets: EMBEDDED_UI_ASSETS.to_vec(),
         browser_lifecycle_policy: browser_lifecycle_policy_spec(),

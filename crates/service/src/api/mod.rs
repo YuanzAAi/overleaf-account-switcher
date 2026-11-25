@@ -95,7 +95,6 @@ use crate::account_registration::validate_registration_input;
 use crate::{
     account_secret_for_copy_with_backend, add_account_from_login_result_in_store_with_backend,
     add_card_from_line_in_store_with_backend,
-    change_account_overleaf_password_from_login_result_in_store_with_backend,
     change_account_overleaf_password_in_store_with_backend, dashboard_summary_with_backend,
     detect_browser_profile_account_in_store, ensure_registration_result_artifacts,
     export_accounts_to_directory_with_backend, export_accounts_to_json_with_backend,
@@ -108,7 +107,6 @@ use crate::{
     refresh_account_cookie_from_login_result_in_store_with_backend,
     refresh_account_cookie_with_credentials_in_store_with_backend,
     refresh_account_git_token_metadata_with_browser_batch_in_store_with_backend,
-    refresh_account_git_token_metadata_with_browser_in_store_with_backend,
     refresh_saved_account_sessions_in_store_with_backend,
     register_account_with_subscription_in_store_with_backend,
     remove_accounts_locally_in_store_with_backend, remove_card_in_store_with_backend, resolve_account_cookies_for_recovery,

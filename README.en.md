@@ -46,7 +46,7 @@ An agent can handle much of a LaTeX writing workflow, but going all-in on agents
 | Area | Capabilities |
 | --- | --- |
 | Account management | Card and list views, search and filters, bulk selection, aliases, password login, Cookie import, queued file imports, and single-file or multi-file exports. |
-| Sessions and credentials | Cookie identity checks and HTTP-first session recovery, Git token retrieval and generation, local password updates, remote password changes, and credential copying and status checks. |
+| Sessions and credentials | HTTP-first Cookie recovery, Git token status and generation, and remote password changes, with browser fallback when needed; local password updates and credential copying and status checks. |
 | Browser account switching | Switch within the current Chrome profile, verify the target identity, refresh subscription information, and optionally migrate projects and synchronize skills credentials. |
 | Project management | Independent per-account project windows with search and refresh, copy, rename, ZIP download, PDF compilation and download, archive, and trash controls; choose projects before switching while preserving their order and verifying target access. |
 | Overleaf Skills | Install, update, and uninstall Codex / Claude Code skills and synchronize the current account's credentials so agents can edit projects, inspect Git history, compile in the cloud, and download PDFs, source, and logs. |
@@ -59,7 +59,7 @@ An agent can handle much of a LaTeX writing workflow, but going all-in on agents
 - **Bring your agent into the paper workflow.** Connect local material, Overleaf projects, and compiled PDFs with less uploading and copy-pasting.
 - **Move projects as you switch accounts.** When moving to an account with premium entitlements, handle project ownership and access as part of the switch.
 - **Keep your browser and skills on the same account.** Optionally synchronize Cookies and Git tokens during a browser switch instead of configuring each tool separately.
-- **Recover from an expired Cookie.** Accounts with saved passwords try HTTP login first, reusing device credentials saved after browser verification. A browser opens when the server requires reCAPTCHA. Device credentials are stored per account in the system keyring; temporary browser profiles are still cleaned up after the session.
+- **Recover from an expired Cookie.** Accounts with saved passwords try HTTP login first, reusing device credentials saved after browser verification. These credentials are stored per account in the system keyring. If the server no longer accepts them or requires reCAPTCHA, login continues in the browser. Temporary profiles are cleaned up after the session.
 - **Keep compile timeouts out of the way.** With multiple accounts that have premium entitlements, browser switching and project migration let you move work to another premium account instead of staying constrained by the Free plan's compile limit.
 
 Compile limits generally follow the **project owner's** plan; switching a collaborator's account alone does not increase them. Overleaf Account Switcher does not alter entitlements. Trial eligibility and duration come from Overleaf. See [Overleaf's premium feature documentation](https://docs.overleaf.com/getting-started/free-and-premium-plans/premium-features).
@@ -67,6 +67,8 @@ Compile limits generally follow the **project owner's** plan; switching a collab
 <p align="center">
   <img src="docs/images/accounts-light.png" alt="Account workspace showing plans, expiry, credential status, browser switching, and execution logs" width="1000">
 </p>
+
+Git token retrieval reuses a complete locally stored token when more than 7 days remain before expiry. Generation is attempted when the token is missing, its expiry is unknown, or 7 days or less remain.
 
 ### Trials, cards, and concurrency
 
@@ -124,7 +126,7 @@ Other features reuse the same task and session infrastructure with their own exe
 | Projects and downloads | `api/projects` uses `overleaf-api` for project operations and cloud compilation. Project permissions govern access; compile timeouts and errors enter the task log with readable explanations. ZIP / PDF payloads pass through memory: desktop writes a file only after a save path is confirmed, while Web UI delegates downloads to the browser. |
 | Registration resources and persistence | `resources` selects cards by BIN, expiry, and policy and supplies addresses. After subscription management finishes, the task collects the Cookie, actual expiry, and Git token when required by the selected setting. Identity and required data are checked before saving the account; submitting payment alone does not mark it complete. |
 
-Account changes reread the latest data and save under the commit lock, so concurrent tasks do not overwrite one another. Concurrent registration keeps input, progress, and sessions separate for each account. Cancelled browser tasks finish session cleanup before releasing account locks; card reservations are released when the batch ends. Browser account switching remains serial to prevent competing changes to the current browser account.
+Network waits for login, Git token operations, and password changes run outside the commit lock. Saving rereads the latest account data and checks that the session has not changed; batch subscription checks run concurrently. Concurrent registration keeps input, progress, and sessions separate for each account. Cancelled browser tasks finish session cleanup before releasing account locks; card reservations are released when the batch ends. Browser account switching remains serial to prevent competing changes to the current browser account.
 
 <a id="download"></a>
 

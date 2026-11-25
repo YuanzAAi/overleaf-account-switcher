@@ -29,55 +29,82 @@ pub(super) fn refresh_account_subscriptions_response(
     let commit_lock = state.account_commit_lock();
     let job_id = task_id.clone();
     let job = ApiBackgroundJob::new("account-subscriptions", move |shared_state| {
-        let mut items = Vec::new();
         let total = request.aliases.len() as u32;
-        for alias in request.aliases {
-            if browser_task_cancel_requested(&shared_state, &job_id) {
+        let result = block_on_api(async {
+            use futures_util::{stream, StreamExt};
+            let jobs = request.aliases.iter().enumerate().map(|(index, alias)| {
+                let shared_state = &shared_state;
+                let job_id = &job_id;
+                let store = &store;
+                let backend = &backend;
+                let refresher = &refresher;
+                let commit_lock = &commit_lock;
+                async move {
+                    if browser_task_cancel_requested(shared_state, job_id) {
+                        return (index, None);
+                    }
+                    let result =
+                        crate::account_session::refresh_saved_account_session_with_commit_lock(
+                            store,
+                            alias,
+                            now_unix,
+                            backend.as_ref(),
+                            refresher.as_ref(),
+                            Some(commit_lock),
+                            false,
+                        )
+                        .await;
+                    (
+                        index,
+                        Some(AccountSessionRefreshBatchItem::from_result(
+                            alias.clone(),
+                            result,
+                        )),
+                    )
+                }
+            });
+            let mut pending =
+                stream::iter(jobs).buffer_unordered(DEFAULT_BROWSER_BATCH_CONCURRENCY);
+            let mut completed = Vec::new();
+            while let Some((index, item)) = pending.next().await {
+                let Some(item) = item else { continue };
                 if let Ok(mut state) = shared_state.lock() {
-                    let _ = state.tasks.cancel_task(&job_id, "订阅刷新已取消");
+                    let detail = item
+                        .error
+                        .as_ref()
+                        .map(account_session_error_message)
+                        .unwrap_or_else(|| "订阅状态已更新".into());
+                    let _ = state.tasks.append_log(
+                        &job_id,
+                        if item.refreshed {
+                            TaskLogLevel::Info
+                        } else {
+                            TaskLogLevel::Warning
+                        },
+                        format!("{}：{detail}", item.alias),
+                    );
+                    let _ =
+                        state
+                            .tasks
+                            .set_progress_value(&job_id, completed.len() as u32 + 1, total);
+                }
+                completed.push((index, item));
+            }
+            completed.sort_by_key(|(index, _)| *index);
+            completed
+                .into_iter()
+                .map(|(_, item)| item)
+                .collect::<Vec<_>>()
+        });
+        let items = match result {
+            Ok(items) => items,
+            Err(response) => {
+                if let Ok(mut state) = shared_state.lock() {
+                    fail_tracked_task(&mut state, Some(&job_id), response.body);
                 }
                 return;
             }
-            let result = block_on_api(
-                crate::account_session::refresh_saved_account_session_with_commit_lock(
-                    &store,
-                    &alias,
-                    now_unix,
-                    backend.as_ref(),
-                    refresher.as_ref(),
-                    Some(&commit_lock),
-                    false,
-                ),
-            );
-            let item = AccountSessionRefreshBatchItem::from_result(
-                alias.clone(),
-                result.unwrap_or_else(|response| {
-                    Err(AccountSessionError::Io {
-                        message: response.body,
-                    })
-                }),
-            );
-            if let Ok(mut state) = shared_state.lock() {
-                let detail = item
-                    .error
-                    .as_ref()
-                    .map(account_session_error_message)
-                    .unwrap_or_else(|| "订阅状态已更新".into());
-                let _ = state.tasks.append_log(
-                    &job_id,
-                    if item.refreshed {
-                        TaskLogLevel::Info
-                    } else {
-                        TaskLogLevel::Warning
-                    },
-                    format!("{alias}：{detail}"),
-                );
-                let _ = state
-                    .tasks
-                    .set_progress_value(&job_id, items.len() as u32 + 1, total);
-            }
-            items.push(item);
-        }
+        };
         let cancelled = browser_task_cancel_requested(&shared_state, &job_id);
         let report = AccountSessionRefreshBatchReport::from_items(items);
         if let Ok(mut state) = shared_state.lock() {

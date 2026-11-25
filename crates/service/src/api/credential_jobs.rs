@@ -1,4 +1,5 @@
 use super::*;
+use crate::account_session::AccountSessionSnapshot;
 
 pub(super) fn queue_credential_add_browser_session_response(
     state: &mut ApiState,
@@ -1108,33 +1109,100 @@ impl CredentialBrowserItemJob {
         &self,
         runtime: &tokio::runtime::Runtime,
         login: LoginResult,
+        transport: Option<&ReqwestSessionTransport>,
+        expected_session: Option<&AccountSessionSnapshot>,
     ) -> Result<CredentialLoginReport, String> {
-        match &self.plan {
-            CredentialBrowserPlan::Add(plan) => {
-                runtime.block_on(add_account_from_login_result_in_store_with_backend(
-                    &self.store,
-                    plan.alias_hint.as_deref(),
-                    &plan.email,
-                    SecretText::new(plan.password.clone()),
-                    login,
-                    self.metadata_refresher.as_ref(),
-                    self.now_unix,
-                    self.secret_backend.as_ref(),
-                ))
-            }
-            _ => runtime.block_on(
-                refresh_account_cookie_from_login_result_in_store_with_backend(
+        let client = transport.cloned().map(OverleafSessionClient::new);
+        let refresher: &(dyn AccountSessionMetadataRefresher + Sync) = match client.as_ref() {
+            Some(client) => client,
+            None => self.metadata_refresher.as_ref(),
+        };
+        runtime
+            .block_on(
+                crate::account_credentials::save_account_login_with_commit_lock(
                     &self.store,
                     self.plan.alias(),
-                    SecretText::new(self.plan.password().to_string()),
+                    CredentialsLoginInput {
+                        email: self.plan.email().unwrap_or_default().trim().to_string(),
+                        password: SecretText::new(self.plan.password().to_string()),
+                    },
                     login,
-                    self.metadata_refresher.as_ref(),
+                    matches!(self.plan, CredentialBrowserPlan::Add(_)),
+                    refresher,
                     self.now_unix,
                     self.secret_backend.as_ref(),
+                    &self.commit_lock,
+                    expected_session,
                 ),
-            ),
+            )
+            .map_err(|error| account_credential_error_message(&error))
+    }
+
+    fn browser_git_token(
+        &self,
+        runtime: &tokio::runtime::Runtime,
+        browser: &(dyn BrowserAutomation + Send + Sync),
+        expected_session: Option<&AccountSessionSnapshot>,
+    ) -> Result<CredentialBrowserCommitReport, AccountGitTokenError> {
+        runtime
+            .block_on(
+                crate::account_git_token::run_browser_git_token_with_commit_lock(
+                    &self.store,
+                    self.plan.alias(),
+                    browser,
+                    matches!(self.plan, CredentialBrowserPlan::GitToken(_)),
+                    self.now_unix,
+                    self.secret_backend.as_ref(),
+                    &self.commit_lock,
+                    expected_session,
+                ),
+            )
+            .map(|report| {
+                report.map_or(
+                    CredentialBrowserCommitReport::GitTokenSkipped,
+                    CredentialBrowserCommitReport::GitToken,
+                )
+            })
+    }
+
+    fn capture_account_session(&self) -> Result<AccountSessionSnapshot, String> {
+        let _guard = self
+            .commit_lock
+            .lock()
+            .map_err(|_| "account commit lock poisoned".to_string())?;
+        let document = self.store.load().map_err(|error| error.to_string())?;
+        let record = document
+            .accounts
+            .get(self.plan.alias())
+            .ok_or_else(|| "目标账号已不存在".to_string())?;
+        if self.plan.email().is_some_and(|expected| {
+            !record
+                .email
+                .as_deref()
+                .is_some_and(|actual| actual.trim().eq_ignore_ascii_case(expected.trim()))
+        }) {
+            return Err("目标账号邮箱已变更，请重新提交任务".to_string());
         }
-        .map_err(|error| account_credential_error_message(&error))
+        Ok(AccountSessionSnapshot::capture(
+            record,
+            self.plan.alias(),
+            self.secret_backend.as_ref(),
+        ))
+    }
+
+    fn check_account_session(&self, snapshot: &AccountSessionSnapshot) -> Result<(), String> {
+        let document = self.store.load().map_err(|error| error.to_string())?;
+        if document
+            .accounts
+            .get(self.plan.alias())
+            .is_some_and(|record| {
+                snapshot.matches(record, self.plan.alias(), self.secret_backend.as_ref())
+            })
+        {
+            Ok(())
+        } else {
+            Err("目标账号在操作期间已变更，请核对远端结果后重试".to_string())
+        }
     }
 
     fn try_protocol_git_token(
@@ -1142,20 +1210,75 @@ impl CredentialBrowserItemJob {
         shared_state: &Arc<StdMutex<ApiState>>,
         runtime: &tokio::runtime::Runtime,
         transport: &ReqwestSessionTransport,
-        login: Option<LoginResult>,
+        snapshot: &AccountSessionSnapshot,
     ) -> Option<Result<CredentialBrowserCommitReport, String>> {
+        if browser_task_cancel_requested(shared_state, &self.task_id) {
+            return None;
+        }
+        if snapshot
+            .cookies()
+            .and_then(|cookies| cookies.get(overleaf_api::OVERLEAF_SESSION_COOKIE))
+            != transport
+                .cookies()
+                .get(overleaf_api::OVERLEAF_SESSION_COOKIE)
+        {
+            return Some(Err(
+                "账号 Cookie 已变更，请重新提交 Git token 任务".to_string()
+            ));
+        }
+        {
+            let _guard = match self.commit_lock.lock() {
+                Ok(guard) => guard,
+                Err(_) => return Some(Err("account commit lock poisoned".to_string())),
+            };
+            if let Err(error) = self.check_account_session(snapshot) {
+                return Some(Err(error));
+            }
+            if matches!(self.plan, CredentialBrowserPlan::GitToken(_)) {
+                match self.current_git_token_is_reusable() {
+                    Ok(true) => return Some(Ok(CredentialBrowserCommitReport::GitTokenSkipped)),
+                    Ok(false) => {}
+                    Err(error) => return Some(Err(error)),
+                }
+            }
+        }
         let state = if matches!(self.plan, CredentialBrowserPlan::GitTokenRefresh(_)) {
             self.log_stage(
                 shared_state,
                 TaskLogLevel::Info,
                 "阶段：协议读取 Git token 状态",
             );
-            runtime.block_on(transport.fetch_git_token_state()).ok()?
+            match runtime.block_on(transport.fetch_git_token_state()) {
+                Ok(state) => state,
+                Err(error) => {
+                    self.log_stage(
+                        shared_state,
+                        TaskLogLevel::Warning,
+                        format!("阶段：协议读取 Git token 状态未完成（{error}），切换浏览器"),
+                    );
+                    return None;
+                }
+            }
         } else {
             self.log_stage(shared_state, TaskLogLevel::Info, "阶段：协议生成 Git token");
             let (token, expiry) = match runtime.block_on(transport.create_git_token()) {
                 Ok(Some(value)) => value,
-                Ok(None) => return None,
+                Ok(None) => {
+                    self.log_stage(
+                        shared_state,
+                        TaskLogLevel::Warning,
+                        "阶段：协议生成 Git token 未获支持，切换浏览器",
+                    );
+                    return None;
+                }
+                Err(error) if error.request_was_not_applied() => {
+                    self.log_stage(
+                        shared_state,
+                        TaskLogLevel::Warning,
+                        format!("阶段：协议生成 Git token 未完成（{error}），切换浏览器"),
+                    );
+                    return None;
+                }
                 Err(error) => return Some(Err(format!("协议生成 Git token 结果未确认: {error}"))),
             };
             overleaf_api::GitTokenPageState {
@@ -1170,10 +1293,8 @@ impl CredentialBrowserItemJob {
             Ok(guard) => guard,
             Err(_) => return Some(Err("account commit lock poisoned".to_string())),
         };
-        if let Some(login) = login {
-            if let Err(error) = self.save_login(runtime, login) {
-                return Some(Err(error));
-            }
+        if let Err(error) = self.check_account_session(snapshot) {
+            return Some(Err(error));
         }
         Some(
             apply_git_token_page_state_in_store_with_backend(
@@ -1193,33 +1314,104 @@ impl CredentialBrowserItemJob {
         runtime: &tokio::runtime::Runtime,
         transport: &ReqwestSessionTransport,
         login: Option<LoginResult>,
+        snapshot: &AccountSessionSnapshot,
     ) -> Option<Result<CredentialBrowserCommitReport, String>> {
         let CredentialBrowserPlan::PasswordChange(plan) = &self.plan else {
             return None;
         };
+        if browser_task_cancel_requested(shared_state, &self.task_id) {
+            return None;
+        }
+        let saved_session;
+        let login_updated = login.is_some();
+        let snapshot = if let Some(login) = login {
+            if let Err(error) = self.save_login(runtime, login, Some(transport), Some(snapshot)) {
+                return Some(Err(error));
+            }
+            saved_session = match self.capture_account_session() {
+                Ok(snapshot) => snapshot,
+                Err(error) => return Some(Err(error)),
+            };
+            &saved_session
+        } else {
+            snapshot
+        };
+        if snapshot
+            .cookies()
+            .and_then(|cookies| cookies.get(overleaf_api::OVERLEAF_SESSION_COOKIE))
+            != transport
+                .cookies()
+                .get(overleaf_api::OVERLEAF_SESSION_COOKIE)
+        {
+            return Some(Err("账号 Cookie 已变更，请重新提交改密任务".to_string()));
+        }
+        {
+            let _guard = match self.commit_lock.lock() {
+                Ok(guard) => guard,
+                Err(_) => return Some(Err("account commit lock poisoned".to_string())),
+            };
+            if let Err(error) = self.check_account_session(snapshot) {
+                return Some(Err(error));
+            }
+        }
+        if browser_task_cancel_requested(shared_state, &self.task_id) {
+            return None;
+        }
         self.log_stage(shared_state, TaskLogLevel::Info, "阶段：协议改密");
         match runtime
             .block_on(transport.change_password(&plan.current_password, &plan.new_password))
         {
             Ok(true) => {}
-            Ok(false) => return None,
+            Ok(false) => {
+                self.log_stage(
+                    shared_state,
+                    TaskLogLevel::Warning,
+                    "阶段：协议改密被服务端拒绝，切换浏览器",
+                );
+                return None;
+            }
+            Err(error) if error.request_was_not_applied() => {
+                self.log_stage(
+                    shared_state,
+                    TaskLogLevel::Warning,
+                    format!("阶段：协议改密未完成（{error}），切换浏览器"),
+                );
+                return None;
+            }
             Err(error) => return Some(Err(format!("协议改密结果未确认: {error}"))),
         }
         let _guard = match self.commit_lock.lock() {
             Ok(guard) => guard,
-            Err(_) => return Some(Err("account commit lock poisoned".to_string())),
+            Err(_) => {
+                return Some(Err(
+                    "远端密码已修改，但本地保存锁不可用，请使用新密码重新登录".to_string(),
+                ));
+            }
         };
+        if let Err(error) = self.check_account_session(snapshot) {
+            return Some(Err(format!(
+                "远端密码已修改，但本地账号状态无法确认：{error}；请使用新密码重新登录"
+            )));
+        }
         Some(
             save_confirmed_password_change_in_store_with_backend(
                 &self.store,
                 &plan.alias,
                 SecretText::new(plan.new_password.clone()),
-                login,
+                None,
                 self.now_unix,
                 self.secret_backend.as_ref(),
             )
-            .map(CredentialBrowserCommitReport::PasswordChange)
-            .map_err(|error| overleaf_password_change_error_message(&error)),
+            .map(|mut report| {
+                report.login_updated = login_updated;
+                CredentialBrowserCommitReport::PasswordChange(report)
+            })
+            .map_err(|error| {
+                format!(
+                    "远端密码已修改，但本地保存失败：{}；请使用新密码重新登录",
+                    overleaf_password_change_error_message(&error)
+                )
+            }),
         )
     }
 
@@ -1253,11 +1445,7 @@ impl CredentialBrowserItemJob {
         self.log_stage(
             shared_state,
             TaskLogLevel::Info,
-            if device_history.is_some() {
-                "阶段：协议登录（复用已验证设备凭据）"
-            } else {
-                "阶段：协议登录（无已验证设备凭据）"
-            },
+            "阶段：协议登录",
         );
         let (transport, user) =
             match runtime.block_on(ReqwestSessionTransport::try_login_with_device_history(
@@ -1286,6 +1474,11 @@ impl CredentialBrowserItemJob {
         if browser_task_cancel_requested(shared_state, &self.task_id) {
             return None;
         }
+        self.log_stage(
+            shared_state,
+            TaskLogLevel::Info,
+            "阶段：协议登录成功",
+        );
         let login = LoginResult {
             email: user.email,
             user_id: user.user_id,
@@ -1311,23 +1504,33 @@ impl CredentialBrowserItemJob {
         &self,
         shared_state: &Arc<StdMutex<ApiState>>,
     ) -> Option<Result<CredentialBrowserCommitReport, String>> {
+        if browser_task_cancel_requested(shared_state, &self.task_id) {
+            return None;
+        }
         let runtime = build_api_runtime().ok()?;
-        if matches!(
-            self.plan,
-            CredentialBrowserPlan::GitTokenRefresh(_)
-                | CredentialBrowserPlan::GitToken(_)
-                | CredentialBrowserPlan::PasswordChange(_)
-        ) {
-            let document = self.store.load().ok()?;
-            let record = document.accounts.get(self.plan.alias())?;
-            if let Ok(cookies) = resolve_account_cookies_for_recovery(
-                record,
-                self.plan.alias(),
-                self.secret_backend.as_ref(),
-            ) {
-                let transport = ReqwestSessionTransport::new(cookies);
-                let client = OverleafSessionClient::new(transport.clone());
-                let identity = runtime.block_on(client.fetch_user_info()).ok();
+        let original = if matches!(self.plan, CredentialBrowserPlan::Add(_)) {
+            None
+        } else {
+            match self.capture_account_session() {
+                Ok(snapshot) => Some(snapshot),
+                Err(error) => return Some(Err(error)),
+            }
+        };
+        let force_login = matches!(&self.plan,
+            CredentialBrowserPlan::GitTokenRefresh(plan) | CredentialBrowserPlan::GitToken(plan)
+                if plan.force_credentials_login);
+        if !force_login
+            && matches!(
+                self.plan,
+                CredentialBrowserPlan::GitTokenRefresh(_)
+                    | CredentialBrowserPlan::GitToken(_)
+                    | CredentialBrowserPlan::PasswordChange(_)
+            )
+        {
+            let original = original.as_ref()?;
+            if let Some(cookies) = original.cookies().cloned() {
+                let mut transport = ReqwestSessionTransport::new(cookies);
+                let identity = runtime.block_on(transport.fetch_user_info()).ok();
                 let expected = self.plan.email().map(str::trim);
                 if browser_task_cancel_requested(shared_state, &self.task_id) {
                     return None;
@@ -1344,50 +1547,82 @@ impl CredentialBrowserItemJob {
                             &runtime,
                             &transport,
                             None,
+                            original,
                         );
                     }
-                    return self.try_protocol_git_token(shared_state, &runtime, &transport, None);
+                    return self.try_protocol_git_token(
+                        shared_state,
+                        &runtime,
+                        &transport,
+                        original,
+                    );
                 }
             }
         }
 
-        if !matches!(
-            self.plan,
-            CredentialBrowserPlan::Add(_)
-                | CredentialBrowserPlan::Refresh(_)
-                | CredentialBrowserPlan::GitTokenRefresh(_)
-                | CredentialBrowserPlan::GitToken(_)
-                | CredentialBrowserPlan::PasswordChange(_)
-        ) {
-            return None;
-        }
         let (transport, login) = self.try_protocol_login(shared_state, &runtime)?;
         match &self.plan {
             CredentialBrowserPlan::Add(_) | CredentialBrowserPlan::Refresh(_) => {
-                let _guard = match self.commit_lock.lock() {
-                    Ok(guard) => guard,
-                    Err(_) => return Some(Err("account commit lock poisoned".to_string())),
-                };
+                self.log_stage(
+                    shared_state,
+                    TaskLogLevel::Info,
+                    "阶段：刷新账号信息并保存",
+                );
                 Some(
-                    self.save_login(&runtime, login)
+                    self.save_login(&runtime, login, Some(&transport), original.as_ref())
                         .map(CredentialBrowserCommitReport::Credential),
                 )
             }
             CredentialBrowserPlan::GitTokenRefresh(_) | CredentialBrowserPlan::GitToken(_) => {
-                self.try_protocol_git_token(shared_state, &runtime, &transport, Some(login))
+                if let Err(error) =
+                    self.save_login(&runtime, login, Some(&transport), original.as_ref())
+                {
+                    return Some(Err(error));
+                }
+                let saved = match self.capture_account_session() {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => return Some(Err(error)),
+                };
+                self.try_protocol_git_token(shared_state, &runtime, &transport, &saved)
             }
-            CredentialBrowserPlan::PasswordChange(_) => {
-                self.try_protocol_password_change(shared_state, &runtime, &transport, Some(login))
+            CredentialBrowserPlan::PasswordChange(_) => self.try_protocol_password_change(
+                shared_state,
+                &runtime,
+                &transport,
+                Some(login),
+                original.as_ref()?,
+            ),
+            CredentialBrowserPlan::BrowserLogin(plan) => {
+                if let Err(error) =
+                    self.save_login(&runtime, login.clone(), Some(&transport), original.as_ref())
+                {
+                    return Some(Err(error));
+                }
+                if browser_task_cancel_requested(shared_state, &self.task_id) {
+                    return None;
+                }
+                Some(
+                    runtime
+                        .block_on(open_account_browser_login_with_login_result(
+                            &plan.alias,
+                            plan.email.clone(),
+                            &login,
+                            self.local_chrome.as_ref(),
+                        ))
+                        .map(CredentialBrowserCommitReport::BrowserLogin)
+                        .map_err(|error| browser_auto_login_error_message(&error)),
+                )
             }
-            _ => unreachable!(),
         }
     }
 
     fn commit(
         &self,
+        shared_state: &Arc<StdMutex<ApiState>>,
         runtime: &tokio::runtime::Runtime,
         login: LoginResult,
         browser: &(dyn BrowserAutomation + Send + Sync),
+        expected_session: Option<&AccountSessionSnapshot>,
     ) -> Result<CredentialBrowserCommitReport, String> {
         if matches!(
             self.plan,
@@ -1395,64 +1630,75 @@ impl CredentialBrowserItemJob {
                 | CredentialBrowserPlan::GitToken(_)
                 | CredentialBrowserPlan::BrowserLogin(_)
         ) {
-            let report = self.save_login(runtime, login.clone())?;
+            let report = self.save_login(runtime, login.clone(), None, expected_session)?;
             if let Some(error) = credential_report_failure_message(&report) {
                 return Err(error);
             }
         }
         match &self.plan {
             CredentialBrowserPlan::Add(_) | CredentialBrowserPlan::Refresh(_) => self
-                .save_login(runtime, login)
+                .save_login(runtime, login, None, expected_session)
                 .map(CredentialBrowserCommitReport::Credential),
-            CredentialBrowserPlan::PasswordChange(plan) => runtime
-                .block_on(
-                    change_account_overleaf_password_from_login_result_in_store_with_backend(
-                        &self.store,
-                        &plan.alias,
-                        SecretText::new(plan.current_password.clone()),
-                        SecretText::new(plan.new_password.clone()),
-                        login,
-                        browser,
-                        self.now_unix,
-                        self.secret_backend.as_ref(),
-                    ),
-                )
-                .map(CredentialBrowserCommitReport::PasswordChange)
-                .map_err(|error| overleaf_password_change_error_message(&error)),
-            CredentialBrowserPlan::GitTokenRefresh(plan) => runtime
-                .block_on(
-                    refresh_account_git_token_metadata_with_browser_in_store_with_backend(
-                        &self.store,
-                        &plan.alias,
-                        browser,
-                        self.secret_backend.as_ref(),
-                    ),
-                )
-                .map(CredentialBrowserCommitReport::GitToken)
-                .map_err(|error| account_git_token_error_message(&error)),
-            CredentialBrowserPlan::GitToken(plan) => runtime
-                .block_on(
-                    generate_account_git_token_with_browser_in_store_with_backend(
-                        &self.store,
-                        std::slice::from_ref(&plan.alias),
-                        browser,
-                        self.now_unix,
-                        self.secret_backend.as_ref(),
-                    ),
-                )
-                .map_err(|error| account_git_token_error_message(&error))?
-                .items
-                .into_iter()
-                .next()
-                .ok_or_else(|| "Git token generation returned no item".to_string())
-                .and_then(|item| match (item.report, item.error) {
-                    (Some(report), _) if item.refreshed => {
-                        Ok(CredentialBrowserCommitReport::GitToken(report))
-                    }
-                    (_, _) if item.skipped => Ok(CredentialBrowserCommitReport::GitTokenSkipped),
-                    (_, Some(error)) => Err(account_git_token_error_message(&error)),
-                    _ => Err("Git token generation did not complete".to_string()),
-                }),
+            CredentialBrowserPlan::PasswordChange(plan) => {
+                let original =
+                    expected_session.ok_or_else(|| "缺少登录前的账号状态".to_string())?;
+                let transport =
+                    ReqwestSessionTransport::new(overleaf_browser::cookies_to_map(&login.cookies));
+                if let Some(result) = self.try_protocol_password_change(
+                    shared_state,
+                    runtime,
+                    &transport,
+                    Some(login.clone()),
+                    original,
+                ) {
+                    return result;
+                }
+                if browser_task_cancel_requested(shared_state, &self.task_id) {
+                    return Err("用户取消".to_string());
+                }
+                let saved_session = self.capture_account_session()?;
+                if saved_session
+                    .cookies()
+                    .and_then(|cookies| cookies.get(overleaf_api::OVERLEAF_SESSION_COOKIE))
+                    != transport
+                        .cookies()
+                        .get(overleaf_api::OVERLEAF_SESSION_COOKIE)
+                {
+                    return Err("账号 Cookie 已变更，请重新提交改密任务".to_string());
+                }
+                runtime
+                    .block_on(
+                        crate::account_password_change::change_password_with_commit_lock(
+                            &self.store,
+                            &plan.alias,
+                            SecretText::new(plan.current_password.clone()),
+                            SecretText::new(plan.new_password.clone()),
+                            login,
+                            browser,
+                            self.now_unix,
+                            self.secret_backend.as_ref(),
+                            &self.commit_lock,
+                            Some(&saved_session),
+                        ),
+                    )
+                    .map(CredentialBrowserCommitReport::PasswordChange)
+                    .map_err(|error| overleaf_password_change_error_message(&error))
+            }
+            CredentialBrowserPlan::GitTokenRefresh(_) | CredentialBrowserPlan::GitToken(_) => {
+                let original = self.capture_account_session()?;
+                let transport =
+                    ReqwestSessionTransport::new(overleaf_browser::cookies_to_map(&login.cookies));
+                if let Some(result) =
+                    self.try_protocol_git_token(shared_state, runtime, &transport, &original)
+                {
+                    return result;
+                }
+                if browser_task_cancel_requested(shared_state, &self.task_id) {
+                    return Err("用户取消".to_string());
+                }
+                self.browser_git_token(runtime, browser, Some(&original))
+                    .map_err(|error| account_git_token_error_message(&error))
+            }
             CredentialBrowserPlan::BrowserLogin(plan) => runtime
                 .block_on(open_account_browser_login_with_login_result(
                     &plan.alias,
@@ -1549,19 +1795,6 @@ impl CredentialBrowserItemJob {
             }
         }
 
-        let protocol_result = self.try_protocol_shortcut(&shared_state);
-        if let Some(result) = protocol_result {
-            match result {
-                Ok(report) => self.finish_completed(&shared_state, report),
-                Err(error) => self.finish_failed(&shared_state, error),
-            }
-            return;
-        }
-        if browser_task_cancel_requested(&shared_state, &self.task_id) {
-            self.finish_cancelled(&shared_state, "用户取消");
-            return;
-        }
-
         match self.try_browser_login_with_saved_cookie(&shared_state) {
             BrowserLoginSavedCookieAction::NotApplicable => {}
             BrowserLoginSavedCookieAction::Completed(report) => {
@@ -1588,6 +1821,30 @@ impl CredentialBrowserItemJob {
             }
         }
 
+        let protocol_result = self.try_protocol_shortcut(&shared_state);
+        if let Some(result) = protocol_result {
+            match result {
+                Ok(report) => self.finish_completed(&shared_state, report),
+                Err(error) => self.finish_failed(&shared_state, error),
+            }
+            return;
+        }
+        if browser_task_cancel_requested(&shared_state, &self.task_id) {
+            self.finish_cancelled(&shared_state, "用户取消");
+            return;
+        }
+
+        let browser_baseline = if matches!(self.plan, CredentialBrowserPlan::Add(_)) {
+            None
+        } else {
+            match self.capture_account_session() {
+                Ok(snapshot) => Some(snapshot),
+                Err(error) => {
+                    self.finish_failed(&shared_state, error);
+                    return;
+                }
+            }
+        };
         self.log_stage(&shared_state, TaskLogLevel::Info, "阶段：启动浏览器会话");
         let (mut runtime, mut session) = match open_account_browser_session(
             Arc::clone(&self.local_chrome),
@@ -1611,7 +1868,12 @@ impl CredentialBrowserItemJob {
             format!("阶段：{}", self.operation.running_message()),
         );
 
-        match self.try_git_token_with_saved_cookie(&shared_state, &runtime, &session) {
+        match self.try_git_token_with_saved_cookie(
+            &shared_state,
+            &runtime,
+            &session,
+            browser_baseline.as_ref(),
+        ) {
             GitTokenSavedCookieAction::NotApplicable => {}
             GitTokenSavedCookieAction::Completed(report) => {
                 self.cleanup_session(&shared_state, &runtime, session, "Git token 已完成");
@@ -1853,10 +2115,18 @@ impl CredentialBrowserItemJob {
             TaskLogLevel::Info,
             "阶段：登录成功，保存账号结果",
         );
-        let result = match self.commit_lock.lock() {
-            Ok(_guard) => self.commit(&runtime, login, session.automation()),
-            Err(_) => Err("account commit lock poisoned".to_string()),
-        };
+        if browser_task_cancel_requested(&shared_state, &self.task_id) {
+            self.cleanup_session(&shared_state, &runtime, session, "用户取消");
+            self.finish_cancelled(&shared_state, "用户取消");
+            return;
+        }
+        let result = self.commit(
+            &shared_state,
+            &runtime,
+            login,
+            session.automation(),
+            browser_baseline.as_ref(),
+        );
         self.cleanup_session(&shared_state, &runtime, session, "任务完成");
         match result {
             Ok(item_report) => self.finish_completed(&shared_state, item_report),
@@ -1911,6 +2181,9 @@ impl CredentialBrowserItemJob {
                 return BrowserLoginSavedCookieAction::Failed(message);
             }
         };
+        if browser_task_cancel_requested(shared_state, &self.task_id) {
+            return BrowserLoginSavedCookieAction::NotApplicable;
+        }
         match runtime.block_on(open_account_browser_login_with_session(
             &plan.alias,
             plan.email.clone(),
@@ -1935,10 +2208,11 @@ impl CredentialBrowserItemJob {
         shared_state: &Arc<StdMutex<ApiState>>,
         runtime: &tokio::runtime::Runtime,
         session: &LocalChromeCdpSession,
+        expected_session: Option<&AccountSessionSnapshot>,
     ) -> GitTokenSavedCookieAction {
-        let (plan, generate_token) = match &self.plan {
-            CredentialBrowserPlan::GitToken(plan) => (plan, true),
-            CredentialBrowserPlan::GitTokenRefresh(plan) => (plan, false),
+        let plan = match &self.plan {
+            CredentialBrowserPlan::GitToken(plan)
+            | CredentialBrowserPlan::GitTokenRefresh(plan) => plan,
             _ => return GitTokenSavedCookieAction::NotApplicable,
         };
         if plan.force_credentials_login {
@@ -1976,54 +2250,17 @@ impl CredentialBrowserItemJob {
             TaskLogLevel::Info,
             "阶段：提交 Git token 操作",
         );
-        let result = match self.commit_lock.lock() {
-            Ok(_guard) if generate_token => {
-                match runtime.block_on(
-                    generate_account_git_token_with_browser_in_store_with_backend(
-                        &self.store,
-                        std::slice::from_ref(&plan.alias),
-                        session.automation(),
-                        self.now_unix,
-                        self.secret_backend.as_ref(),
-                    ),
-                ) {
-                    Ok(report) => match report.items.into_iter().next() {
-                        Some(item) if item.skipped => {
-                            return GitTokenSavedCookieAction::Skipped;
-                        }
-                        Some(item) if item.refreshed => {
-                            item.report.ok_or_else(|| AccountGitTokenError::Browser {
-                                message: "Git token generation returned no report".to_string(),
-                            })
-                        }
-                        Some(item) => {
-                            Err(item.error.unwrap_or_else(|| AccountGitTokenError::Browser {
-                                message: "Git token generation did not complete".to_string(),
-                            }))
-                        }
-                        None => Err(AccountGitTokenError::Browser {
-                            message: "Git token generation returned no item".to_string(),
-                        }),
-                    },
-                    Err(error) => Err(error),
-                }
+        if browser_task_cancel_requested(shared_state, &self.task_id) {
+            return GitTokenSavedCookieAction::NotApplicable;
+        }
+        match self.browser_git_token(runtime, session.automation(), expected_session) {
+            Ok(CredentialBrowserCommitReport::GitToken(report)) => {
+                GitTokenSavedCookieAction::Completed(report)
             }
-            Ok(_guard) => runtime.block_on(
-                refresh_account_git_token_metadata_with_browser_in_store_with_backend(
-                    &self.store,
-                    &plan.alias,
-                    session.automation(),
-                    self.secret_backend.as_ref(),
-                ),
-            ),
-            Err(_) => {
-                return GitTokenSavedCookieAction::Failed(
-                    "account commit lock poisoned".to_string(),
-                );
+            Ok(CredentialBrowserCommitReport::GitTokenSkipped) => {
+                GitTokenSavedCookieAction::Skipped
             }
-        };
-        match result {
-            Ok(report) => GitTokenSavedCookieAction::Completed(report),
+            Ok(_) => unreachable!(),
             Err(AccountGitTokenError::MissingCookies { .. }) => GitTokenSavedCookieAction::Recover(
                 "Cookie 在 Git token 操作时失效，转账号密码登录".to_string(),
             ),

@@ -90,6 +90,8 @@ pub enum SessionError {
     MissingCsrfToken,
     MissingUserInfo,
     LoginVerificationRequired,
+    RequestRejected { status: u16 },
+    RequestNotSent { message: String },
 }
 
 impl fmt::Display for SessionHttpError {
@@ -116,11 +118,22 @@ impl fmt::Display for SessionError {
             Self::MissingCsrfToken => f.write_str("missing csrf token"),
             Self::MissingUserInfo => f.write_str("missing user info"),
             Self::LoginVerificationRequired => f.write_str("服务端要求本次登录完成人机验证"),
+            Self::RequestRejected { status } => write!(f, "服务端拒绝请求（HTTP {status}）"),
+            Self::RequestNotSent { message } => write!(f, "请求尚未提交：{message}"),
         }
     }
 }
 
 impl std::error::Error for SessionError {}
+
+impl SessionError {
+    pub fn request_was_not_applied(&self) -> bool {
+        matches!(
+            self,
+            Self::RequestRejected { .. } | Self::RequestNotSent { .. }
+        )
+    }
+}
 
 impl From<SessionHttpError> for SessionError {
     fn from(value: SessionHttpError) -> Self {
@@ -149,6 +162,7 @@ pub struct ReqwestSessionTransport {
     client: reqwest::Client,
     cookies: BTreeMap<String, String>,
     session_expiry: Option<i64>,
+    project_page: Option<SessionPageResponse>,
 }
 
 impl ReqwestSessionTransport {
@@ -157,6 +171,7 @@ impl ReqwestSessionTransport {
             client: reqwest::Client::new(),
             cookies,
             session_expiry: None,
+            project_page: None,
         }
     }
 
@@ -166,6 +181,17 @@ impl ReqwestSessionTransport {
 
     pub fn session_expiry(&self) -> Option<i64> {
         self.session_expiry
+    }
+
+    // 仅在本次账号操作内复用身份页，后续 CSRF 和订阅解析无需重复下载。
+    pub async fn fetch_user_info(&mut self) -> SessionResult<OverleafUserInfo> {
+        self.project_page = None;
+        let response = self.get(&project_page_request()).await?;
+        ensure_session_success(response.status, &response.body)?;
+        let user =
+            parse_user_info_from_page(&response.body).ok_or(SessionError::MissingUserInfo)?;
+        self.project_page = Some(response);
+        Ok(user)
     }
 
     fn cookie_header_for_path(&self, path: &str) -> String {
@@ -244,7 +270,10 @@ impl ReqwestSessionTransport {
     ) -> SessionResult<reqwest::Response> {
         let csrf = OverleafSessionClient::new(self.clone())
             .fetch_csrf_token()
-            .await?;
+            .await
+            .map_err(|error| SessionError::RequestNotSent {
+                message: error.to_string(),
+            })?;
         let request = self
             .client
             .post(format!("https://www.overleaf.com{path}"))
@@ -253,11 +282,16 @@ impl ReqwestSessionTransport {
             .header("x-csrf-token", csrf)
             .header("origin", "https://www.overleaf.com")
             .header("referer", format!("https://www.overleaf.com{referer}"))
+            .header("accept", "application/json")
+            .header(
+                "user-agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            )
             .header("content-type", "application/json");
         let request = if let Some(body) = body {
             request.json(&body)
         } else {
-            request
+            request.header(reqwest::header::CONTENT_LENGTH, "0")
         };
         let response = request
             .send()
@@ -283,7 +317,9 @@ impl ReqwestSessionTransport {
             .post_session_json("/oauth/personal-access-tokens", "/user/settings", None)
             .await?;
         if !response.status().is_success() {
-            return Ok(None);
+            return Err(SessionError::RequestRejected {
+                status: response.status().as_u16(),
+            });
         }
         let value: serde_json::Value = response
             .json()
@@ -332,7 +368,9 @@ impl ReqwestSessionTransport {
             )
             .await?;
         if !response.status().is_success() {
-            return Ok(false);
+            return Err(SessionError::RequestRejected {
+                status: response.status().as_u16(),
+            });
         }
         let value: serde_json::Value = response
             .json()
@@ -448,9 +486,7 @@ impl ReqwestSessionTransport {
             return Ok(None);
         }
 
-        let user = OverleafSessionClient::new(transport.clone())
-            .fetch_user_info()
-            .await?;
+        let user = transport.fetch_user_info().await?;
         if user
             .email
             .as_deref()
@@ -494,6 +530,11 @@ impl SessionTransport for ReqwestSessionTransport {
         &self,
         request: &SessionPageRequest,
     ) -> Result<SessionPageResponse, SessionTransportError> {
+        if request.path == "/project" {
+            if let Some(page) = &self.project_page {
+                return Ok(page.clone());
+            }
+        }
         let prepared = self.prepare_request(request).map_err(|err| match err {
             SessionError::Transport(err) => err,
             other => SessionTransportError::new(other.to_string()),

@@ -13,67 +13,67 @@ const RUNTIME_ARTIFACT_CANDIDATES: &[RuntimeArtifactCandidate] = &[
         name: "target",
         relative_path: "target",
         kind: "build_target",
-        cleanup_hint: "Remove after final delivery or space warning",
+        cleanup_hint: "编译产物与依赖缓存；清理后再次构建需要重新编译",
     },
     RuntimeArtifactCandidate {
         name: "node_modules",
         relative_path: "node_modules",
         kind: "node_modules",
-        cleanup_hint: "Remove if a Node toolchain was used unexpectedly",
+        cleanup_hint: "Node.js 依赖；清理后构建前需要重新安装",
     },
     RuntimeArtifactCandidate {
         name: ".next",
         relative_path: ".next",
         kind: "web_build",
-        cleanup_hint: "Remove generated web build output",
+        cleanup_hint: "前端构建产物；清理后需重新构建",
     },
     RuntimeArtifactCandidate {
         name: "dist",
         relative_path: "dist",
         kind: "web_build",
-        cleanup_hint: "Remove generated web build output",
+        cleanup_hint: "前端构建产物；清理后需重新构建",
     },
     RuntimeArtifactCandidate {
         name: "src-tauri target",
         relative_path: "src-tauri/target",
         kind: "tauri_build_target",
-        cleanup_hint: "Remove generated Tauri build output",
+        cleanup_hint: "桌面构建产物；清理后需重新编译",
     },
     RuntimeArtifactCandidate {
         name: "apps/web node_modules",
         relative_path: "apps/web/node_modules",
         kind: "web_node_modules",
-        cleanup_hint: "Remove if a Node toolchain was used unexpectedly",
+        cleanup_hint: "Node.js 依赖；清理后构建前需要重新安装",
     },
     RuntimeArtifactCandidate {
         name: "apps/web .next",
         relative_path: "apps/web/.next",
         kind: "web_build",
-        cleanup_hint: "Remove generated web build output",
+        cleanup_hint: "前端构建产物；清理后需重新构建",
     },
     RuntimeArtifactCandidate {
         name: "apps/web dist",
         relative_path: "apps/web/dist",
         kind: "web_build",
-        cleanup_hint: "Remove generated web build output",
+        cleanup_hint: "前端构建产物；清理后需重新构建",
     },
     RuntimeArtifactCandidate {
         name: "apps/desktop target",
         relative_path: "apps/desktop/target",
         kind: "desktop_build_target",
-        cleanup_hint: "Remove generated desktop build output",
+        cleanup_hint: "桌面构建产物；清理后需重新编译",
     },
     RuntimeArtifactCandidate {
         name: "apps/desktop src-tauri target",
         relative_path: "apps/desktop/src-tauri/target",
         kind: "desktop_tauri_build_target",
-        cleanup_hint: "Remove generated desktop Tauri build output",
+        cleanup_hint: "桌面构建产物；清理后需重新编译",
     },
     RuntimeArtifactCandidate {
         name: ".pytest_cache",
         relative_path: ".pytest_cache",
         kind: "python_test_cache",
-        cleanup_hint: "Remove unused Python test cache",
+        cleanup_hint: "Python 测试缓存",
     },
 ];
 
@@ -260,7 +260,7 @@ fn runtime_artifact_status_for_workspace(workspace_dir: &Path) -> RuntimeArtifac
             path: path_string(&path),
             kind: "python_bytecode_cache",
             bytes: directory_size_bytes(&path),
-            cleanup_hint: "Remove unused Python bytecode cache",
+            cleanup_hint: "Python 字节码缓存",
         });
     }
     items.sort_by(|left, right| left.path.cmp(&right.path));

@@ -1,6 +1,6 @@
 [package]
 name = "overleaf-desktop"
-version = "0.1.1"
+version = "0.2.0"
 description = "Native desktop shell for Overleaf Account Switcher"
 authors = ["YuanzAAi"]
 license.workspace = true

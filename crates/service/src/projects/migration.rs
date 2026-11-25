@@ -1367,7 +1367,7 @@ async fn clone_project_with_retry<T>(
 where
     T: ProjectApiTransport,
 {
-    // 结果不明的写请求只允许核对；本轮最终审计也不能再次创建副本。
+    // 克隆结果未确认时只核对远端状态，后续检查不得重复创建副本。
     if progress
         .uncertain_clones
         .lock()

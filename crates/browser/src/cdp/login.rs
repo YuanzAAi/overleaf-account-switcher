@@ -25,8 +25,6 @@ pub const DEFAULT_LOGIN_STATUS_CHECKS: usize = 30;
 pub const DEFAULT_LOGIN_POLL_DELAY_MS: u64 = 1_000;
 pub const CAPTCHA_WAIT_SECONDS_PER_CHALLENGE: u64 = 60;
 pub const CAPTCHA_NEAR_DEADLINE_SECONDS: u64 = 5;
-pub const DEFAULT_ROBOT_VERIFICATION_RETRIES: usize = 2;
-pub const ROBOT_VERIFICATION_RETRY_DELAY_MS: u64 = 750;
 const RUNTIME_NAVIGATION_RETRY_ATTEMPTS: usize = 80;
 const RUNTIME_NAVIGATION_RETRY_DELAY_MS: u64 = 250;
 const EMAIL_CODE_AUTO_ADVANCE_GRACE_CHECKS: usize = 10;
@@ -61,6 +59,8 @@ pub struct CdpLoginAutomation<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CdpLoginActionResult {
     pub ok: bool,
+    #[serde(default)]
+    pub robot_verification_blocked: bool,
     #[serde(default)]
     pub missing: Option<String>,
     #[serde(default)]
@@ -217,57 +217,43 @@ where
         &self,
         input: &CredentialsLoginInput,
     ) -> BrowserAutomationResult<()> {
-        let mut session = self.session.lock().await;
-        if !self
-            .use_current_page_for_next_submission
-            .swap(false, Ordering::AcqRel)
-        {
-            session
-                .navigate(self.options.login_url.clone())
-                .await
-                .map_err(cdp_error)?;
-        }
-
-        let fill_result = evaluate_action_with_await(
-            &mut session,
-            &fill_login_form_expression(&input.email, input.password.expose()),
-            true,
+        self.submit_auth_form(
+            &self.options.login_url,
+            fill_login_form_expression(&input.email, input.password.expose()),
+            submit_login_form_submit_expression(),
         )
-        .await?;
-        ensure_action_ok(fill_result)?;
-
-        let submit_result =
-            evaluate_action_with_await(&mut session, &submit_login_form_submit_expression(), true)
-                .await?;
-        ensure_action_ok(submit_result)
+        .await
     }
 
     pub async fn submit_registration_credentials(
         &self,
         input: &RegistrationInput,
     ) -> BrowserAutomationResult<()> {
+        self.submit_auth_form(
+            OVERLEAF_REGISTER_URL,
+            fill_registration_form_expression(&input.email, input.password.expose()),
+            submit_registration_form_expression(),
+        )
+        .await
+    }
+
+    async fn submit_auth_form(
+        &self,
+        url: &str,
+        fill_expression: String,
+        submit_expression: String,
+    ) -> BrowserAutomationResult<()> {
         let mut session = self.session.lock().await;
         if !self
             .use_current_page_for_next_submission
             .swap(false, Ordering::AcqRel)
         {
-            session
-                .navigate(OVERLEAF_REGISTER_URL)
-                .await
-                .map_err(cdp_error)?;
+            session.navigate(url).await.map_err(cdp_error)?;
         }
-
-        let fill_result = evaluate_action_with_await(
-            &mut session,
-            &fill_registration_form_expression(&input.email, input.password.expose()),
-            true,
-        )
-        .await?;
+        let fill_result = evaluate_action_with_await(&mut session, &fill_expression, true).await?;
         ensure_action_ok(fill_result)?;
-
         let submit_result =
-            evaluate_action_with_await(&mut session, &submit_registration_form_expression(), true)
-                .await?;
+            evaluate_action_with_await(&mut session, &submit_expression, true).await?;
         ensure_action_ok(submit_result)
     }
 
@@ -378,7 +364,8 @@ where
         let max_checks = self.options.status_checks.max(1);
         let started_at = Instant::now();
         let remaining_budget = || {
-            use_wall_clock.then(|| SUBSCRIPTION_PAGE_WAIT_TIMEOUT.saturating_sub(started_at.elapsed()))
+            use_wall_clock
+                .then(|| SUBSCRIPTION_PAGE_WAIT_TIMEOUT.saturating_sub(started_at.elapsed()))
         };
 
         let mut session =
@@ -835,8 +822,8 @@ where
                         "wait for Overleaf subscription confirmation after payment (session busy)"
                             .to_string(),
                 });
-            }
-        };
+                }
+            };
 
         let mut last_page_state = None;
         for _ in 0..max_checks {
@@ -1142,121 +1129,111 @@ where
         &self,
         input: CredentialsLoginInput,
     ) -> BrowserAutomationResult<LoginResult> {
-        let mut robot_retry_count = 0;
+        self.submit_login_credentials(&input).await?;
+        let mut session = self.session.lock().await;
 
-        'login_attempts: loop {
-            self.submit_login_credentials(&input).await?;
-            let mut session = self.session.lock().await;
+        let mut max_checks = self.options.status_checks.max(1);
+        let mut check_index = 0;
+        let mut captcha_wait_permit = None;
+        let mut captcha_started_check = None;
+        let mut captcha_seen = false;
 
-            let mut max_checks = self.options.status_checks.max(1);
-            let mut check_index = 0;
-            let mut captcha_wait_permit = None;
-            let mut captcha_started_check = None;
-            let mut captcha_seen = false;
-
-            while check_index < max_checks {
-                let page_state = read_login_page_state(&mut session).await?;
-                let state = classify_login_page_state(&page_state);
-                let near_deadline = is_near_login_deadline(
-                    check_index,
-                    max_checks,
-                    self.options.poll_delay_ms,
-                    CAPTCHA_NEAR_DEADLINE_SECONDS,
-                );
-                match state {
-                    CdpLoginState::Success => {
-                        return login_result_from_session(&mut session, Some(input.email)).await;
-                    }
-                    CdpLoginState::ChallengeRequired => {
-                        captcha_seen = true;
-                        if self
-                            .return_immediately_on_visible_challenge
-                            .load(Ordering::Acquire)
-                        {
-                            return Err(BrowserAutomationError::ChallengeRequired {
-                                challenge: "reCAPTCHA or robot verification".to_string(),
-                            });
-                        }
-                        if captcha_wait_permit.is_none() {
-                            let (permit, budget) = register_captcha_waiter();
-                            let started_check = check_index + 1;
-                            captcha_started_check = Some(started_check);
-                            max_checks = extend_login_checks_for_captcha(
-                                max_checks,
-                                started_check,
-                                self.options.poll_delay_ms,
-                                budget.wait_seconds,
-                            );
-                            captcha_wait_permit = Some(permit);
-                        } else {
-                            let budget = current_captcha_wait_budget();
-                            max_checks = extend_login_checks_for_captcha(
-                                max_checks,
-                                captcha_started_check.unwrap_or(check_index + 1),
-                                self.options.poll_delay_ms,
-                                budget.wait_seconds,
-                            );
-                        }
-                        sleep_after_pending_check(self.options.poll_delay_ms).await;
-                    }
-                    CdpLoginState::ChallengePossible if near_deadline => {
-                        captcha_seen = true;
-                        if captcha_wait_permit.is_none() {
-                            let (permit, budget) = register_captcha_waiter();
-                            let started_check = check_index + 1;
-                            captcha_started_check = Some(started_check);
-                            max_checks = extend_login_checks_for_captcha(
-                                max_checks,
-                                started_check,
-                                self.options.poll_delay_ms,
-                                budget.wait_seconds,
-                            );
-                            captcha_wait_permit = Some(permit);
-                        } else {
-                            let budget = current_captcha_wait_budget();
-                            max_checks = extend_login_checks_for_captcha(
-                                max_checks,
-                                captcha_started_check.unwrap_or(check_index + 1),
-                                self.options.poll_delay_ms,
-                                budget.wait_seconds,
-                            );
-                        }
-                        sleep_after_pending_check(self.options.poll_delay_ms).await;
-                    }
-                    CdpLoginState::ChallengePossible => {
-                        sleep_after_pending_check(self.options.poll_delay_ms).await;
-                    }
-                    CdpLoginState::InvalidCredentials => {
-                        return Err(BrowserAutomationError::InvalidCredentials);
-                    }
-                    CdpLoginState::RobotVerificationBlocked => {
-                        if robot_retry_count < DEFAULT_ROBOT_VERIFICATION_RETRIES {
-                            robot_retry_count += 1;
-                            drop(session);
-                            sleep_after_pending_check(ROBOT_VERIFICATION_RETRY_DELAY_MS).await;
-                            continue 'login_attempts;
-                        }
-                        return Err(BrowserAutomationError::RobotVerificationBlocked);
-                    }
-                    CdpLoginState::RegisteredEmail => {
-                        return Err(BrowserAutomationError::RegisteredEmail { email: input.email });
-                    }
-                    CdpLoginState::Pending => {
-                        sleep_after_pending_check(self.options.poll_delay_ms).await;
-                    }
+        while check_index < max_checks {
+            let page_state = read_login_page_state(&mut session).await?;
+            let state = classify_login_page_state(&page_state);
+            let near_deadline = is_near_login_deadline(
+                check_index,
+                max_checks,
+                self.options.poll_delay_ms,
+                CAPTCHA_NEAR_DEADLINE_SECONDS,
+            );
+            match state {
+                CdpLoginState::Success => {
+                    return login_result_from_session(&mut session, Some(input.email)).await;
                 }
-                check_index += 1;
+                CdpLoginState::ChallengeRequired => {
+                    captcha_seen = true;
+                    if self
+                        .return_immediately_on_visible_challenge
+                        .load(Ordering::Acquire)
+                    {
+                        return Err(BrowserAutomationError::ChallengeRequired {
+                            challenge: "reCAPTCHA or robot verification".to_string(),
+                        });
+                    }
+                    if captcha_wait_permit.is_none() {
+                        let (permit, budget) = register_captcha_waiter();
+                        let started_check = check_index + 1;
+                        captcha_started_check = Some(started_check);
+                        max_checks = extend_login_checks_for_captcha(
+                            max_checks,
+                            started_check,
+                            self.options.poll_delay_ms,
+                            budget.wait_seconds,
+                        );
+                        captcha_wait_permit = Some(permit);
+                    } else {
+                        let budget = current_captcha_wait_budget();
+                        max_checks = extend_login_checks_for_captcha(
+                            max_checks,
+                            captcha_started_check.unwrap_or(check_index + 1),
+                            self.options.poll_delay_ms,
+                            budget.wait_seconds,
+                        );
+                    }
+                    sleep_after_pending_check(self.options.poll_delay_ms).await;
+                }
+                CdpLoginState::ChallengePossible if near_deadline => {
+                    captcha_seen = true;
+                    if captcha_wait_permit.is_none() {
+                        let (permit, budget) = register_captcha_waiter();
+                        let started_check = check_index + 1;
+                        captcha_started_check = Some(started_check);
+                        max_checks = extend_login_checks_for_captcha(
+                            max_checks,
+                            started_check,
+                            self.options.poll_delay_ms,
+                            budget.wait_seconds,
+                        );
+                        captcha_wait_permit = Some(permit);
+                    } else {
+                        let budget = current_captcha_wait_budget();
+                        max_checks = extend_login_checks_for_captcha(
+                            max_checks,
+                            captcha_started_check.unwrap_or(check_index + 1),
+                            self.options.poll_delay_ms,
+                            budget.wait_seconds,
+                        );
+                    }
+                    sleep_after_pending_check(self.options.poll_delay_ms).await;
+                }
+                CdpLoginState::ChallengePossible => {
+                    sleep_after_pending_check(self.options.poll_delay_ms).await;
+                }
+                CdpLoginState::InvalidCredentials => {
+                    return Err(BrowserAutomationError::InvalidCredentials);
+                }
+                CdpLoginState::RobotVerificationBlocked => {
+                    return Err(BrowserAutomationError::RobotVerificationBlocked);
+                }
+                CdpLoginState::RegisteredEmail => {
+                    return Err(BrowserAutomationError::RegisteredEmail { email: input.email });
+                }
+                CdpLoginState::Pending => {
+                    sleep_after_pending_check(self.options.poll_delay_ms).await;
+                }
             }
+            check_index += 1;
+        }
 
-            return if captcha_seen {
-                Err(BrowserAutomationError::ChallengeRequired {
-                    challenge: "reCAPTCHA or robot verification".to_string(),
-                })
-            } else {
-                Err(BrowserAutomationError::Timeout {
-                    operation: "wait for Overleaf login".to_string(),
-                })
-            };
+        if captcha_seen {
+            Err(BrowserAutomationError::ChallengeRequired {
+                challenge: "reCAPTCHA or robot verification".to_string(),
+            })
+        } else {
+            Err(BrowserAutomationError::Timeout {
+                operation: "wait for Overleaf login".to_string(),
+            })
         }
     }
 
@@ -1402,7 +1379,7 @@ pub fn fill_login_form_expression(email: &str, password: &str) -> String {
         r#"(() => new Promise(resolve => {{
   const email = {email_json};
   const password = {password_json};
-  const deadline = Date.now() + 15000;
+  const deadline = Date.now() + 30000;
   const done = value => resolve(JSON.stringify(value));
   const findFirst = selectors => {{
     for (const selector of selectors) {{
@@ -1436,6 +1413,10 @@ pub fn fill_login_form_expression(email: &str, password: &str) -> String {
     el.dispatchEvent(new Event('change', {{ bubbles: true }}));
   }};
   const tick = () => {{
+    if (document.readyState !== 'complete') {{
+      if (Date.now() >= deadline) return done({{ ok: false, missing: 'login page initialization' }});
+      return setTimeout(tick, 100);
+    }}
     const emailInput = findFirst([
       'input[name="email"]',
       'input[type="email"]',
@@ -1478,12 +1459,22 @@ pub fn fill_login_form_expression(email: &str, password: &str) -> String {
 }
 
 pub fn submit_login_form_submit_expression() -> String {
-    r#"(() => new Promise(resolve => {
-  const deadline = Date.now() + 15000;
-  const done = value => resolve(JSON.stringify(value));
-  let recaptchaReady = false;
-  let readyRequested = false;
-  const visible = element => {
+    submit_auth_form_expression(false)
+}
+
+fn submit_auth_form_expression(registration: bool) -> String {
+    let find_submit = if registration {
+        r#"const findSubmit = () => {
+    const primary = document.querySelector('button[type="submit"], input[type="submit"]');
+    if (primary) return primary;
+    for (const node of document.querySelectorAll('button, a')) {
+      const text = (node.innerText || node.textContent || '').trim().toLowerCase();
+      if (text.includes('create') || text.includes('sign up') || text.includes('register')) return node;
+    }
+    return null;
+  };"#
+    } else {
+        r#"const visible = element => {
     if (!element) return false;
     const style = window.getComputedStyle ? window.getComputedStyle(element) : null;
     const rect = element.getBoundingClientRect ? element.getBoundingClientRect() : null;
@@ -1491,41 +1482,70 @@ pub fn submit_login_form_submit_expression() -> String {
       && (!rect || (rect.width > 0 && rect.height > 0));
   };
   const findSubmit = () => Array.from(document.querySelectorAll('button[type="submit"], input[type="submit"]'))
-    .find(button => visible(button)) || document.querySelector('button[type="submit"], input[type="submit"]');
-  const tick = () => {
+    .find(button => visible(button)) || document.querySelector('button[type="submit"], input[type="submit"]');"#
+    };
+    let missing = if registration {
+        "registration submit"
+    } else {
+        "submit"
+    };
+    let mark_submitted = if registration {
+        ""
+    } else {
+        "window.__overleafSwitcherLoginSubmitted = Date.now();"
+    };
+    // 与页面表单使用同一组 API 判断就绪，避免额外等待 ready 回调。
+    format!(
+        r#"(() => new Promise(resolve => {{
+  const deadline = Date.now() + 30000;
+  const done = value => resolve(JSON.stringify(value));
+  {find_submit}
+  const tick = () => {{
     const submit = findSubmit();
-    if (!submit) {
-      if (Date.now() > deadline) return done({ ok: false, missing: 'submit' });
+    if (!submit) {{
+      if (Date.now() >= deadline) return done({{ ok: false, missing: '{missing}' }});
       return setTimeout(tick, 100);
-    }
-    if (submit.disabled || submit.getAttribute('aria-disabled') === 'true') {
-      if (Date.now() > deadline) return done({ ok: false, missing: 'submit enabled' });
+    }}
+    if (submit.disabled || submit.getAttribute('aria-disabled') === 'true') {{
+      if (Date.now() >= deadline) return done({{ ok: false, missing: '{missing} enabled' }});
       return setTimeout(tick, 100);
-    }
+    }}
     const recaptchaScript = Array.from(document.scripts || []).some(script => /recaptcha/i.test(String(script.src || '')));
-    if (recaptchaScript) {
+    if (recaptchaScript) {{
       const recaptcha = window.grecaptcha;
-      if (!recaptcha || typeof recaptcha.ready !== 'function') {
-        if (Date.now() > deadline) return done({ ok: false, missing: 'reCAPTCHA initialization' });
+      const ready = recaptcha && ['render', 'execute', 'reset'].every(name => typeof recaptcha[name] === 'function');
+      if (!ready) {{
+        if (Date.now() >= deadline) return done({{ ok: false, robot_verification_blocked: true, missing: 'reCAPTCHA initialization' }});
         return setTimeout(tick, 100);
-      }
-      if (!readyRequested) {
-        readyRequested = true;
-        recaptcha.ready(() => { recaptchaReady = true; });
-      }
-      if (!recaptchaReady) {
-        if (Date.now() >= deadline) return done({ ok: false, missing: 'reCAPTCHA ready callback timeout' });
-        return setTimeout(tick, 100);
-      }
-    }
-    window.__overleafSwitcherLoginSubmitted = Date.now();
-    submit.scrollIntoView({ block: 'center', inline: 'center' });
-    submit.click();
-    return done({ ok: true });
-  };
+      }}
+    }}
+    const form = submit.form || submit.closest('form');
+    let unhandled = false;
+    const guard = event => {{
+      if (event.target === form && !event.defaultPrevented) {{
+        event.preventDefault();
+        unhandled = true;
+      }}
+    }};
+    // 异步表单必须由网页脚本接管，禁止脚本未加载时退化为普通 POST。
+    const asyncForm = form && form.hasAttribute('data-ol-async-form');
+    if (asyncForm) window.addEventListener('submit', guard);
+    try {{
+      submit.scrollIntoView({{ block: 'center', inline: 'center' }});
+      submit.click();
+    }} finally {{
+      if (asyncForm) window.removeEventListener('submit', guard);
+    }}
+    if (unhandled) {{
+      if (Date.now() >= deadline) return done({{ ok: false, missing: '{missing} form initialization' }});
+      return setTimeout(tick, 100);
+    }}
+    {mark_submitted}
+    return done({{ ok: true }});
+  }};
   tick();
-}))()"#
-        .to_string()
+}}))()"#
+    )
 }
 
 pub fn fill_registration_form_expression(email: &str, password: &str) -> String {
@@ -1536,7 +1556,7 @@ pub fn fill_registration_form_expression(email: &str, password: &str) -> String 
         r#"(() => new Promise(resolve => {{
   const email = {email_json};
   const password = {password_json};
-  const deadline = Date.now() + 15000;
+  const deadline = Date.now() + 30000;
   const done = value => resolve(JSON.stringify(value));
   const findFirst = selectors => {{
     for (const selector of selectors) {{
@@ -1561,6 +1581,10 @@ pub fn fill_registration_form_expression(email: &str, password: &str) -> String 
     el.dispatchEvent(new Event('change', {{ bubbles: true }}));
   }};
   const tick = () => {{
+    if (document.readyState !== 'complete') {{
+      if (Date.now() >= deadline) return done({{ ok: false, missing: 'registration page initialization' }});
+      return setTimeout(tick, 100);
+    }}
     const emailInput = findFirst([
       'input[name="email"]',
       'input[type="email"]',
@@ -1613,53 +1637,7 @@ pub fn fill_registration_form_expression(email: &str, password: &str) -> String 
 }
 
 pub fn submit_registration_form_expression() -> String {
-    r#"(() => new Promise(resolve => {
-  const deadline = Date.now() + 15000;
-  const done = value => resolve(JSON.stringify(value));
-  let recaptchaReady = false;
-  let readyRequested = false;
-  const findSubmit = () => {
-    const primary = document.querySelector('button[type="submit"], input[type="submit"]');
-    if (primary) return primary;
-    for (const node of document.querySelectorAll('button, a')) {
-      const text = (node.innerText || node.textContent || '').trim().toLowerCase();
-      if (text.includes('create') || text.includes('sign up') || text.includes('register')) return node;
-    }
-    return null;
-  };
-  const tick = () => {
-    const submit = findSubmit();
-    if (!submit) {
-      if (Date.now() >= deadline) return done({ ok: false, missing: 'registration submit' });
-      return setTimeout(tick, 100);
-    }
-    if (submit.disabled || submit.getAttribute('aria-disabled') === 'true') {
-      if (Date.now() >= deadline) return done({ ok: false, missing: 'registration submit enabled' });
-      return setTimeout(tick, 100);
-    }
-    const recaptchaScript = Array.from(document.scripts || []).some(script => /recaptcha/i.test(String(script.src || '')));
-    if (recaptchaScript) {
-      const recaptcha = window.grecaptcha;
-      if (!recaptcha || typeof recaptcha.ready !== 'function') {
-        if (Date.now() >= deadline) return done({ ok: false, missing: 'reCAPTCHA initialization' });
-        return setTimeout(tick, 100);
-      }
-      if (!readyRequested) {
-        readyRequested = true;
-        recaptcha.ready(() => { recaptchaReady = true; });
-      }
-      if (!recaptchaReady) {
-        if (Date.now() >= deadline) return done({ ok: false, missing: 'reCAPTCHA ready callback timeout' });
-        return setTimeout(tick, 100);
-      }
-    }
-    submit.scrollIntoView({ block: 'center', inline: 'center' });
-    submit.click();
-    done({ ok: true });
-  };
-  tick();
-}))()"#
-        .to_string()
+    submit_auth_form_expression(true)
 }
 
 pub fn fill_registration_email_code_expression(code: &str) -> String {
@@ -2916,6 +2894,17 @@ fn ensure_action_ok(action_result: CdpLoginActionResult) -> BrowserAutomationRes
     if action_result.ok {
         return Ok(());
     }
+    if action_result.robot_verification_blocked {
+        return Err(BrowserAutomationError::RobotVerificationBlocked);
+    }
+
+    if let Some(missing) = action_result.missing.as_deref() {
+        if missing.ends_with("page initialization") || missing.ends_with("form initialization") {
+            return Err(BrowserAutomationError::Timeout {
+                operation: format!("wait for {missing}"),
+            });
+        }
+    }
 
     Err(BrowserAutomationError::ElementNotFound {
         selector: action_result
@@ -3028,6 +3017,118 @@ mod tests {
     use crate::cdp::{CdpCommand, CdpResponse};
     use crate::cdp_session::CdpTransportError;
     use std::sync::Arc;
+
+    struct AuthReadyTransport {
+        blocked_attempts: u64,
+        submissions: Arc<AtomicU64>,
+        navigations: Arc<AtomicU64>,
+    }
+
+    #[async_trait::async_trait]
+    impl CdpTransport for AuthReadyTransport {
+        async fn send(&self, command: &CdpCommand) -> Result<CdpResponse, CdpTransportError> {
+            let result = match command.method.as_str() {
+                "Page.navigate" => {
+                    self.navigations.fetch_add(1, Ordering::SeqCst);
+                    serde_json::json!({})
+                }
+                "Runtime.evaluate" => {
+                    let expression = command.params.as_ref().unwrap()["expression"]
+                        .as_str()
+                        .unwrap();
+                    let blocked = expression.contains("robot_verification_blocked: true")
+                        && self.submissions.fetch_add(1, Ordering::SeqCst) < self.blocked_attempts;
+                    let value = if expression.contains("credential_error_detected:") {
+                        serde_json::json!({"url": OVERLEAF_LOGIN_URL, "title": "", "text": "", "robot_verification_blocked": true})
+                    } else {
+                        serde_json::json!({"ok": !blocked, "robot_verification_blocked": blocked})
+                    };
+                    serde_json::json!({"result": {"type": "string", "value": value.to_string()}})
+                }
+                method => panic!("unexpected command: {method}"),
+            };
+            Ok(CdpResponse {
+                id: Some(command.id),
+                result: Some(result),
+                error: None,
+            })
+        }
+    }
+
+    #[test]
+    fn captcha_initialization_returns_to_existing_fallback_without_reloading() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        for registration in [false, true] {
+            for blocked_attempts in [0, 1, 2] {
+                let submissions = Arc::new(AtomicU64::new(0));
+                let navigations = Arc::new(AtomicU64::new(0));
+                let automation = CdpLoginAutomation::new(CdpSession::new(AuthReadyTransport {
+                    blocked_attempts,
+                    submissions: Arc::clone(&submissions),
+                    navigations: Arc::clone(&navigations),
+                }));
+                automation.use_current_page_for_next_submission();
+                let result = if registration {
+                    runtime.block_on(automation.submit_registration_credentials(
+                        &RegistrationInput {
+                            alias_hint: None,
+                            email: "user@example.test".into(),
+                            password: SecretText::new("password"),
+                            trial_days: 7,
+                            auto_fetch_git_token: false,
+                        },
+                    ))
+                } else {
+                    runtime.block_on(automation.submit_login_credentials(&CredentialsLoginInput {
+                        email: "user@example.test".into(),
+                        password: SecretText::new("password"),
+                    }))
+                };
+                if blocked_attempts > 0 {
+                    assert_eq!(
+                        result,
+                        Err(BrowserAutomationError::RobotVerificationBlocked)
+                    );
+                } else {
+                    assert_eq!(result, Ok(()));
+                }
+                assert_eq!(submissions.load(Ordering::SeqCst), 1);
+                assert_eq!(navigations.load(Ordering::SeqCst), 0);
+            }
+        }
+        let missing = parse_action_result(r#"{"ok":false,"missing":"submit"}"#).unwrap();
+        assert!(matches!(
+            ensure_action_ok(missing),
+            Err(BrowserAutomationError::ElementNotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn rejected_login_is_not_rapidly_resubmitted() {
+        let submissions = Arc::new(AtomicU64::new(0));
+        let navigations = Arc::new(AtomicU64::new(0));
+        let automation = CdpLoginAutomation::new(CdpSession::new(AuthReadyTransport {
+            blocked_attempts: 0,
+            submissions: Arc::clone(&submissions),
+            navigations: Arc::clone(&navigations),
+        }));
+        automation.use_current_page_for_next_submission();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let result = runtime.block_on(automation.login_with_credentials(CredentialsLoginInput {
+            email: "user@example.test".into(),
+            password: SecretText::new("password"),
+        }));
+        assert_eq!(
+            result,
+            Err(BrowserAutomationError::RobotVerificationBlocked)
+        );
+        assert_eq!(submissions.load(Ordering::SeqCst), 1);
+        assert_eq!(navigations.load(Ordering::SeqCst), 0);
+    }
 
     struct LoginCookieTransport {
         include_session: bool,

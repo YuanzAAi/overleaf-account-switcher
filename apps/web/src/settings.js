@@ -493,7 +493,7 @@ export function renderRuntimeHealthStrip(config) {
     [bridgeTone, "扩展桥", state.serviceHealth === "unavailable" ? "待确认" : bridge.connected ? "已连接" : "等待连接", ""],
     [profileTone, "Chrome 档案", profileLabel, profileDetail],
     [secretTone, "密钥存储", secretLabel, ""],
-    [artifactItems === null ? "warning" : "ready", "清理边界", cleanupLabel, cleanupDetail],
+    [artifactItems === null ? "warning" : "ready", "文件清理", cleanupLabel, cleanupDetail],
   ];
 
   container.innerHTML = items

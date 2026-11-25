@@ -547,7 +547,7 @@ export function trialUsagePlaceholderMarkup() {
         <span>无使用进度</span>
       </div>
       <span class="trial-meter-track" aria-hidden="true"><span></span></span>
-      <span class="trial-meter-foot"><span>长期计划兜底</span></span>
+      <span class="trial-meter-foot"><span>暂无到期信息</span></span>
     </div>
   `;
 }
