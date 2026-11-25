@@ -446,7 +446,7 @@ fn run_account_switch_background(
                 secret_backend.as_ref(),
                 metadata_refresher.as_ref(),
                 Some(&commit_lock),
-                None,
+                false,
             ),
         );
         if let Ok(mut state) = shared_state.lock() {

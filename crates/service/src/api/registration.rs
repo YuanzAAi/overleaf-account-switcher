@@ -1801,7 +1801,7 @@ fn save_finalized_registration_result(
             state.secret_backend.as_ref(),
             state.metadata_refresher.as_ref(),
             Some(&commit_lock),
-            fallback_trial_expiry,
+            true,
         ),
     ) {
         Ok(metadata) => {

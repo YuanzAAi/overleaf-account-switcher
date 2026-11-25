@@ -46,7 +46,7 @@ pub(super) fn refresh_account_subscriptions_response(
                     backend.as_ref(),
                     refresher.as_ref(),
                     Some(&commit_lock),
-                    None,
+                    false,
                 ),
             );
             let item = AccountSessionRefreshBatchItem::from_result(
